@@ -56,7 +56,7 @@ class KmpEndToEndTest {
                 "jvm" -> "jvm()"
                 "js" -> "js { nodejs() }"
                 "wasmJs" -> "@OptIn(org.jetbrains.kotlin.gradle.ExperimentalWasmDsl::class) wasmJs { nodejs() }"
-                "android" -> "androidLibrary { namespace = \"com.example.sample\"; compileSdk = 35; minSdk = 24 }"
+                "android" -> "android { namespace = \"com.example.sample\"; compileSdk = 37; minSdk = 24 }"
                 else -> "$target()"
             }
         }

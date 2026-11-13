@@ -68,6 +68,7 @@ class Builds : AutoCloseable {
             repositories {
                 maven { url = uri("${File(pluginRepo).toURI()}") }
                 gradlePluginPortal()
+                google()
                 mavenCentral()
             }
         }

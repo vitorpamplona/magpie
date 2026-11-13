@@ -52,7 +52,7 @@ class FakeMavenRepo(
                 {
                   "name": "${target}ApiElements-published",
                   "attributes": { "org.jetbrains.kotlin.platform.type": "$target" },
-                  "available-at": { "url": "../../$root-$target/$version/$root-$target-$fileVersion.module", "group": "$group", "module": "$root-$target", "version": "$version" }
+                  "available-at": { "url": "../../$root-$target/$version/$root-$target-$version.module", "group": "$group", "module": "$root-$target", "version": "$version" }
                 }
                 """.trimIndent()
             }
@@ -70,12 +70,14 @@ class FakeMavenRepo(
             val artifact = "$root-$target"
             val d = moduleDir(artifact, version)
             val main = "$artifact-$fileVersion.$extension"
+            // Like Gradle, module metadata names a snapshot's files by their plain -SNAPSHOT names.
+            val url = "$artifact-$version.$extension"
             val files =
                 """
                 {
                   "name": "${target}ApiElements-published",
                   "attributes": { "org.jetbrains.kotlin.platform.type": "$target" },
-                  "files": [ { "name": "$main", "url": "$main", "size": 1, "sha256": "x" } ]
+                  "files": [ { "name": "$url", "url": "$url", "size": 1, "sha256": "x" } ]
                 }
                 """.trimIndent()
             File(d, "$artifact-$fileVersion.module").writeText(moduleJson(artifact, version, files))

@@ -118,6 +118,19 @@ class JvmEndToEndTest {
     }
 
     @Test
+    fun snapshotsResolveAndMoveForward() {
+        builds.run(builds.javaLibrary("snap1", "2.0-SNAPSHOT", greeting = "snapshot one"), "publishToNostr", env = builds.signerEnv)
+        val app = builds.consumer("app", "com.example:greeter:2.0-SNAPSHOT")
+        assertTrue("GREETING: snapshot one" in builds.run(app, "run").output)
+
+        Thread.sleep(1100) // a newer created_at replaces the addressable event
+        builds.run(builds.javaLibrary("snap2", "2.0-SNAPSHOT", greeting = "snapshot two"), "publishToNostr", env = builds.signerEnv)
+        val second = builds.run(app, "run", "--refresh-dependencies")
+        assertTrue("GREETING: snapshot two" in second.output, second.output)
+        assertEquals(0, builds.relay.query(Filter(kinds = listOf(MagpieSpec.KIND_RELEASE))).size, "snapshots are not releases")
+    }
+
+    @Test
     fun missingServerListOffersTheTask() {
         val lib = builds.javaLibrary("lib", "1.0.0")
         val stranger =

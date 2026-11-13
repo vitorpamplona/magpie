@@ -20,7 +20,9 @@
  */
 package com.vitorpamplona.magpie.core.publish
 
+import com.vitorpamplona.magpie.spec.Coordinate
 import com.vitorpamplona.magpie.spec.Manifest
+import com.vitorpamplona.magpie.spec.MavenPath
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -46,15 +48,35 @@ public object ModuleChecker {
                 val obj = variant as? JsonObject ?: return@forEach
                 (obj["files"] as? JsonArray)?.forEach { file ->
                     val url = ((file as? JsonObject)?.get("url") as? JsonPrimitive)?.content ?: return@forEach
-                    resolve(dir, url)?.let { if (manifest[it] == null) missing += "$it (from $moduleKey)" }
+                    resolve(dir, url)?.let { if (!present(manifest, it)) missing += "$it (from $moduleKey)" }
                 }
                 val availableAt = ((obj["available-at"] as? JsonObject)?.get("url") as? JsonPrimitive)?.content
                 if (availableAt != null) {
-                    resolve(dir, availableAt)?.let { if (manifest[it] == null) missing += "$it (available-at in $moduleKey)" }
+                    resolve(dir, availableAt)?.let { if (!present(manifest, it)) missing += "$it (available-at in $moduleKey)" }
                 }
             }
         }
         return missing.toList()
+    }
+
+    /**
+     * Whether [key] is in the manifest. A snapshot's module metadata names files by their plain
+     * `-SNAPSHOT` names while the repository holds timestamped ones; any build of the same
+     * classifier and extension counts.
+     */
+    private fun present(
+        manifest: Manifest,
+        key: String,
+    ): Boolean {
+        if (manifest[key] != null) return true
+        val (artifact, version, fileName) = key.split('/')
+        val coordinate = runCatching { Coordinate(manifest.coordinate.group, artifact, version) }.getOrNull() ?: return false
+        if (!coordinate.isSnapshot) return false
+        val wanted = MavenPath.parseFile(coordinate, fileName) ?: return false
+        return manifest.filesOf(artifact).keys.any { name ->
+            val file = MavenPath.parseFile(coordinate, name)
+            file != null && file.snapshotStamp != null && file.classifier == wanted.classifier && file.extension == wanted.extension
+        }
     }
 
     /**
