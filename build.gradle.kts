@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.kotlinMultiplatform) apply false
     alias(libs.plugins.kotlinJvm) apply false
     alias(libs.plugins.serialization) apply false
+    alias(libs.plugins.samWithReceiver) apply false
     alias(libs.plugins.pluginPublish) apply false
     alias(libs.plugins.spotless)
 }

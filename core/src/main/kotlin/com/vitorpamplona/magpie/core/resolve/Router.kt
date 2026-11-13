@@ -166,11 +166,34 @@ public class Router(
             val value = checksums.ofBlob(entry.sha256, blob, checksum)
             return RouterResponse.Bytes(value.toByteArray(), "text/plain", headers)
         }
+        mirror?.let { mirrorModuleMetadata(it, publisher, manifest, publication, coordinate) }
         mirror?.linkFile(publisher, MavenPath.parseFile(coordinate, key.substringAfterLast('/'))!!.toPath(), blob)
         if (key != path.manifestKey) {
             mirror?.linkFile(publisher, path.toPath(), blob)
         }
         return RouterResponse.FileBody(blob, contentTypeOf(path.fileName), headers)
+    }
+
+    /**
+     * An offline build reads the mirror through whichever metadata Gradle asks for, so whenever a
+     * file of a module is served, its `.module` and `.pom` go to the mirror too.
+     */
+    private suspend fun mirrorModuleMetadata(
+        mirror: RepositoryMirror,
+        publisher: HexKey,
+        manifest: Manifest,
+        publication: com.vitorpamplona.magpie.spec.MagpiePublicationEvent,
+        coordinate: com.vitorpamplona.magpie.spec.Coordinate,
+    ) {
+        manifest.filesOf(coordinate.artifact).forEach { (fileName, entry) ->
+            if (!(fileName.endsWith(".pom") || fileName.endsWith(".module"))) return@forEach
+            val path = MavenPath.parseFile(coordinate, fileName) ?: return@forEach
+            try {
+                mirror.linkFile(publisher, path.toPath(), resolver.blob(entry.sha256, entry.size, publication))
+            } catch (e: Exception) {
+                log.debug("Could not mirror $fileName: ${e.message}")
+            }
+        }
     }
 
     /** The manifest key for a request; a plain `-SNAPSHOT` name maps to the newest timestamped file. */
