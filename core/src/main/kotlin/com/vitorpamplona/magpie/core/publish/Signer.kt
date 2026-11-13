@@ -97,7 +97,8 @@ public class BunkerSigner(
     bunkerUri: String,
     nostr: NostrIO,
     private val log: MagpieLog,
-    private val timeoutMs: Long = 120_000,
+    // Longer than Quartz's own request window (65 s, a 2 s pause, one retry of 65 s).
+    private val timeoutMs: Long = 150_000,
 ) : MagpieSigner {
     private val remote =
         NostrSignerRemote.fromBunkerUri(

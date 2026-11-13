@@ -26,6 +26,7 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.content.OutgoingContent
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.cio.CIO
 import io.ktor.server.engine.EmbeddedServer
@@ -70,6 +71,14 @@ class InMemoryBlossom(
 
     /** Auth events seen on uploads, by id. */
     val authEvents = ConcurrentHashMap<String, Event>()
+
+    /** Refuse every upload's authorization (401), whatever it covers. */
+    @Volatile
+    var refuseAllUploads: Boolean = false
+
+    /** Store uploads but answer with a descriptor naming another hash. */
+    @Volatile
+    var misreportHash: Boolean = false
 
     /** When false, every request fails with 503. */
     @Volatile
@@ -126,8 +135,13 @@ class InMemoryBlossom(
         }
         if (head) {
             heads.incrementAndGet()
-            call.response.header(HttpHeaders.ContentLength, blob.size.toString())
-            call.respond(HttpStatusCode.OK)
+            // Headers only, with the blob's real length, as real servers answer HEAD.
+            call.respond(
+                object : OutgoingContent.NoContent() {
+                    override val contentLength: Long = blob.size.toLong()
+                    override val contentType: ContentType = ContentType.Application.OctetStream
+                },
+            )
         } else {
             downloads.incrementAndGet()
             call.respondBytes(blob, ContentType.Application.OctetStream)
@@ -159,6 +173,11 @@ class InMemoryBlossom(
             call.respond(HttpStatusCode.PayloadTooLarge)
             return
         }
+        if (refuseAllUploads) {
+            call.response.header("X-Reason", "uploads are closed")
+            call.respond(HttpStatusCode.Unauthorized)
+            return
+        }
         if (requireAuth) {
             val problem = authProblem(call.request.header(HttpHeaders.Authorization), sha)
             if (problem != null) {
@@ -170,7 +189,7 @@ class InMemoryBlossom(
         blobs[sha] = body
         uploads.incrementAndGet()
         call.respondText(
-            """{"url":"$url/$sha","sha256":"$sha","size":${body.size},"type":"application/octet-stream","uploaded":${System.currentTimeMillis() / 1000}}""",
+            """{"url":"$url/$sha","sha256":"${if (misreportHash) "0".repeat(64) else sha}","size":${body.size},"type":"application/octet-stream","uploaded":${System.currentTimeMillis() / 1000}}""",
             ContentType.Application.Json,
         )
     }

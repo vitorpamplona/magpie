@@ -82,6 +82,13 @@ public sealed interface MavenPath {
 
         private val SNAPSHOT_STAMP = Regex("""^(\d{8}\.\d{6}-\d+)""")
 
+        /**
+         * Orders snapshot stamps (`20240102.030405-7`) by time, then by build number as a number:
+         * build 10 comes after build 9, which a string comparison gets wrong.
+         */
+        public val SNAPSHOT_STAMP_ORDER: Comparator<String> =
+            compareBy<String>({ it.substringBefore('-') }, { it.substringAfter('-').toIntOrNull() ?: 0 })
+
         public fun parse(rawPath: String): MavenPath? {
             val path = rawPath.substringBefore('?').trim('/')
             if (path.isEmpty()) return null

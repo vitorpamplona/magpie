@@ -36,6 +36,7 @@ import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.util.concurrent.atomic.AtomicInteger
@@ -55,6 +56,14 @@ class InMemoryRelay : AutoCloseable {
     /** Every raw frame the relay received. */
     val received: MutableList<String> = java.util.Collections.synchronizedList(mutableListOf<String>())
 
+    /** Rewrites every outgoing frame (a hostile relay), when set. */
+    @Volatile
+    var transformOutgoing: ((String) -> String)? = null
+
+    /** Delays every outgoing frame (a slow relay). */
+    @Volatile
+    var delayOutgoingMs: Long = 0
+
     /** When false, the relay accepts the socket and answers nothing (a dead relay). */
     @Volatile
     var responsive: Boolean = true
@@ -65,7 +74,13 @@ class InMemoryRelay : AutoCloseable {
             routing {
                 webSocket("/") {
                     val outgoing = Channel<String>(Channel.UNLIMITED)
-                    val writer = launch { for (msg in outgoing) send(Frame.Text(msg)) }
+                    val writer =
+                        launch {
+                            for (msg in outgoing) {
+                                if (delayOutgoingMs > 0) delay(delayOutgoingMs)
+                                send(Frame.Text(transformOutgoing?.invoke(msg) ?: msg))
+                            }
+                        }
                     try {
                         server.serve(send = { json -> outgoing.trySend(json) }) { session ->
                             for (frame in incoming) {

@@ -27,6 +27,10 @@ import com.vitorpamplona.quartz.nip01Core.signers.EventTemplate
 import com.vitorpamplona.quartz.nipB7Blossom.BlossomServerUrl
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -68,7 +72,10 @@ public data class UploadOutcome(
     val ok: Boolean,
     val status: Int,
     val reason: String,
-)
+) {
+    /** The server rejected the authorization itself. */
+    val isAuthRefusal: Boolean get() = status == 401 || status == 403
+}
 
 /** BUD-01/02/06 calls against one Blossom server at a time. */
 public class BlossomClient(
@@ -79,21 +86,33 @@ public class BlossomClient(
     public suspend fun has(
         server: String,
         sha256: String,
-    ): Boolean =
+    ): Boolean = size(server, sha256) != null
+
+    /**
+     * `HEAD /<sha256>`: the blob's length if the server has it (-1 when it doesn't say), else
+     * null. Unreachable servers and malformed URLs count as not having it.
+     */
+    public suspend fun size(
+        server: String,
+        sha256: String,
+    ): Long? =
         withContext(Dispatchers.IO) {
+            val url = "${server.trimEnd('/')}/$sha256".toHttpUrlOrNull() ?: return@withContext null
             try {
                 http
                     .newCall(
                         Request
                             .Builder()
-                            .url("${server.trimEnd('/')}/$sha256")
+                            .url(url)
                             .head()
                             .build(),
                     ).execute()
-                    .use { it.isSuccessful }
+                    .use { response ->
+                        if (response.isSuccessful) response.header("Content-Length")?.toLongOrNull() ?: -1L else null
+                    }
             } catch (e: IOException) {
                 log.info("HEAD $server/$sha256 failed: ${e.message}")
-                false
+                null
             }
         }
 
@@ -103,10 +122,11 @@ public class BlossomClient(
         blob: BlobSource,
     ): Preflight =
         withContext(Dispatchers.IO) {
+            val url = "${server.trimEnd('/')}/upload".toHttpUrlOrNull() ?: return@withContext Preflight.Refused(0, "not a URL: $server")
             val request =
                 Request
                     .Builder()
-                    .url("${server.trimEnd('/')}/upload")
+                    .url(url)
                     .head()
                     .header("X-SHA-256", blob.sha256)
                     .header("X-Content-Length", blob.size.toString())
@@ -125,25 +145,38 @@ public class BlossomClient(
             }
         }
 
-    /** BUD-02 `PUT /upload` with a `Nostr <base64>` authorization. */
+    /**
+     * BUD-02 `PUT /upload` with a `Nostr <base64>` authorization. Success means a 2xx *and* a
+     * blob descriptor naming the same sha256: a server that stored something else didn't store it.
+     */
     public suspend fun upload(
         server: String,
         blob: BlobSource,
         auth: Event,
     ): UploadOutcome =
         withContext(Dispatchers.IO) {
+            val url = "${server.trimEnd('/')}/upload".toHttpUrlOrNull() ?: return@withContext UploadOutcome(false, 0, "not a URL: $server")
             val header = "Nostr " + Base64.getEncoder().encodeToString(auth.toJson().toByteArray())
             val request =
                 Request
                     .Builder()
-                    .url("${server.trimEnd('/')}/upload")
+                    .url(url)
                     .put(blob.body())
                     .header("Authorization", header)
                     .header("X-SHA-256", blob.sha256)
                     .build()
             try {
                 http.newCall(request).execute().use { response ->
-                    UploadOutcome(response.isSuccessful, response.code, response.header("X-Reason") ?: response.message)
+                    if (!response.isSuccessful) return@use UploadOutcome(false, response.code, response.header("X-Reason") ?: response.message)
+                    val stored =
+                        runCatching {
+                            ((Json.parseToJsonElement(response.body.string()) as JsonObject)["sha256"] as JsonPrimitive).content.lowercase()
+                        }.getOrNull()
+                    if (stored == blob.sha256) {
+                        UploadOutcome(true, response.code, "stored")
+                    } else {
+                        UploadOutcome(false, response.code, "the server's blob descriptor says ${stored ?: "nothing"}, not ${blob.sha256}")
+                    }
                 }
             } catch (e: IOException) {
                 UploadOutcome(false, 0, e.message ?: "unreachable")

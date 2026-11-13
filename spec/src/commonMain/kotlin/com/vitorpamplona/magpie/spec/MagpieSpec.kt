@@ -68,6 +68,9 @@ public object MagpieSpec {
     /** Releases stay under this many bytes of JSON; secondary files live only in the manifest. */
     public const val MAX_EVENT_BYTES: Int = 16_000
 
+    /** Largest manifest blob a resolver downloads, whatever its event claims. */
+    public const val MAX_MANIFEST_BYTES: Long = 16L * 1024 * 1024
+
     /** Manifest schema version written in the manifest's `schema` field. */
     public const val MANIFEST_SCHEMA: Int = 1
 

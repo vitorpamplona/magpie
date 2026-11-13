@@ -92,13 +92,7 @@ public object MetadataGenerator {
                 .keys
                 .mapNotNull { MavenPath.parseFile(coordinate, it) }
                 .filter { it.snapshotStamp != null }
-        val stamp =
-            files.mapNotNull { it.snapshotStamp }.maxWithOrNull(
-                compareBy({ it.substringBefore('-') }, {
-                    it.substringAfter('-').toIntOrNull()
-                        ?: 0
-                }),
-            )
+        val stamp = files.mapNotNull { it.snapshotStamp }.maxWithOrNull(MavenPath.SNAPSHOT_STAMP_ORDER)
         val base = coordinate.version.removeSuffix("-SNAPSHOT")
         val updated = formatTimestamp(publishedAt)
         return buildString {

@@ -208,7 +208,7 @@ public class Router(
             .keys
             .mapNotNull { MavenPath.parseFile(path.coordinate, it) }
             .filter { it.snapshotStamp != null && it.classifier == path.classifier && it.extension == path.extension }
-            .maxByOrNull { it.snapshotStamp!! }
+            .maxWithOrNull(compareBy(MavenPath.SNAPSHOT_STAMP_ORDER) { it.snapshotStamp!! })
             ?.manifestKey
     }
 

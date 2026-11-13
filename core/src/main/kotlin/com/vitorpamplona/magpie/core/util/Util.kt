@@ -147,3 +147,53 @@ public fun interface Clock {
         public val SYSTEM: Clock = Clock { System.currentTimeMillis() }
     }
 }
+
+/**
+ * A map whose entries expire, and which never grows past [maxEntries]: expired entries are swept
+ * when it gets full, and if that isn't enough it starts over. For caches a flood of distinct keys
+ * (a gateway asked for random paths) must not turn into a memory leak.
+ */
+public class ExpiringCache<K : Any, V>(
+    private val maxEntries: Int,
+    private val clock: Clock,
+) {
+    private class Entry<V>(
+        val value: V,
+        val expiresAt: Long,
+    )
+
+    private val map = java.util.concurrent.ConcurrentHashMap<K, Entry<V>>()
+
+    /** The value if present and not expired. A null [V] stored is returned as present: use [contains]. */
+    public fun get(key: K): V? = map[key]?.takeIf { it.expiresAt > clock.nowMillis() }?.value
+
+    public fun contains(key: K): Boolean = map[key]?.let { it.expiresAt > clock.nowMillis() } == true
+
+    public fun put(
+        key: K,
+        value: V,
+        ttlMs: Long,
+    ) {
+        if (map.size >= maxEntries) {
+            val now = clock.nowMillis()
+            map.entries.removeIf { it.value.expiresAt <= now }
+            if (map.size >= maxEntries) map.clear()
+        }
+        map[key] = Entry(value, clock.nowMillis() + ttlMs)
+    }
+
+    public fun remove(key: K) {
+        map.remove(key)
+    }
+
+    public val size: Int get() = map.size
+}
+
+/** A fixed set of mutexes picked by key hash: per-key exclusion without a map that grows forever. */
+public class StripedMutex(
+    stripes: Int = 64,
+) {
+    private val mutexes = Array(stripes) { kotlinx.coroutines.sync.Mutex() }
+
+    public fun forKey(key: Any): kotlinx.coroutines.sync.Mutex = mutexes[Math.floorMod(key.hashCode(), mutexes.size)]
+}

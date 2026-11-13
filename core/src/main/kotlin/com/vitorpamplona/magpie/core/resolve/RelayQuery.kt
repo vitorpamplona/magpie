@@ -21,16 +21,19 @@
 package com.vitorpamplona.magpie.core.resolve
 
 import com.vitorpamplona.magpie.core.nostr.NostrIO
+import com.vitorpamplona.magpie.core.nostr.RelaysUnavailableException
+import com.vitorpamplona.magpie.core.nostr.VerifiedEvents
 import com.vitorpamplona.magpie.core.util.Files2
 import com.vitorpamplona.magpie.core.util.MagpieLog
 import com.vitorpamplona.magpie.spec.Coordinate
-import com.vitorpamplona.magpie.spec.EventVerification
 import com.vitorpamplona.magpie.spec.MagpieEvents
 import com.vitorpamplona.magpie.spec.MagpieSpec
 import com.vitorpamplona.magpie.spec.ModuleId
 import com.vitorpamplona.quartz.nip01Core.core.Event
 import com.vitorpamplona.quartz.nip01Core.core.HexKey
 import com.vitorpamplona.quartz.nip01Core.relay.filters.Filter
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
@@ -38,8 +41,9 @@ import kotlinx.serialization.json.jsonPrimitive
 import java.io.File
 
 /**
- * The relay queries resolution makes, all filtered to the pinned publisher. Results from every
- * relay are merged and deduplicated by id; signature checks happen in [NostrIO]. Also keeps the
+ * The relay queries resolution makes, all filtered to the trusted publisher. Results from every
+ * relay are merged; signature checks happen in [NostrIO]. A query no relay answered throws
+ * [RelaysUnavailableException] rather than looking like "nothing there". Also keeps the
  * last answer of each query on disk, for offline builds.
  */
 public class RelayQuery(
@@ -47,8 +51,12 @@ public class RelayQuery(
     private val relays: List<String>,
     private val cacheDir: File,
     private val log: MagpieLog,
+    /** At most this many relay queries at once: bounds what a flood of requests can send to relays. */
+    maxConcurrentQueries: Int = 8,
 ) {
     public val online: Boolean get() = nostr != null
+
+    private val gate = Semaphore(maxConcurrentQueries)
 
     /** Releases of [coordinate]'s module at its version. */
     public suspend fun releases(
@@ -87,15 +95,23 @@ public class RelayQuery(
                 authors = listOf(publisher),
                 tags = mapOf(MagpieSpec.TAG_MODULE to listOf(module.key)),
             ),
+            // A module can have more versions than a relay returns per REQ.
+            paged = true,
         )
 
-    /** The publisher's Blossom servers (kind 10063), newest list first. */
+    /** The publisher's Blossom servers (kind 10063); the last list seen when no relay answers. */
     public suspend fun blossomServers(publisher: HexKey): List<String> {
         val cache = File(cacheDir, "servers/$publisher.json")
         val events =
             if (nostr != null) {
-                query(Filter(kinds = listOf(MagpieSpec.KIND_BLOSSOM_SERVERS), authors = listOf(publisher)))
-                    .also { if (it.isNotEmpty()) writeEvents(cache, it) }
+                try {
+                    query(Filter(kinds = listOf(MagpieSpec.KIND_BLOSSOM_SERVERS), authors = listOf(publisher)))
+                        .also { if (it.isNotEmpty()) writeEvents(cache, it) }
+                        .ifEmpty { readEvents(cache) }
+                } catch (e: RelaysUnavailableException) {
+                    log.warn("${e.message}; using the last server list seen")
+                    readEvents(cache)
+                }
             } else {
                 readEvents(cache)
             }
@@ -105,9 +121,13 @@ public class RelayQuery(
         return newest.tags.filter { it.size >= 2 && it[0] == "server" }.map { it[1].trimEnd('/') }
     }
 
-    private suspend fun query(filter: Filter): List<Event> {
+    /** Matching events; throws [RelaysUnavailableException] when no relay answered. */
+    private suspend fun query(
+        filter: Filter,
+        paged: Boolean = false,
+    ): List<Event> {
         val io = nostr ?: return emptyList()
-        return io.query(relays, listOf(filter)).mapNotNull { MagpieEvents.wrap(it) ?: it }
+        return gate.withPermit { io.query(relays, listOf(filter), paged) }.eventsOrThrow().map { MagpieEvents.wrap(it) ?: it }
     }
 
     /** Persists events as a JSON array of event JSON. */
@@ -128,7 +148,7 @@ public class RelayQuery(
                 .mapNotNull { element ->
                     val text = if (element is JsonPrimitive) element.jsonPrimitive.content else element.toString()
                     Event.fromJsonOrNull(text)
-                }.filter { EventVerification.isValid(it) }
+                }.filter { VerifiedEvents.isValid(it) }
                 .map { MagpieEvents.wrap(it) ?: it }
         } catch (e: Exception) {
             log.warn("Ignoring unreadable cache ${file.path}: ${e.message}")

@@ -26,6 +26,8 @@ import com.vitorpamplona.magpie.core.resolve.BlobStore
 import com.vitorpamplona.magpie.core.util.Clock
 import com.vitorpamplona.magpie.core.util.Files2
 import com.vitorpamplona.magpie.core.util.MagpieLog
+import com.vitorpamplona.magpie.core.util.StripedMutex
+import com.vitorpamplona.magpie.spec.EventVerification
 import com.vitorpamplona.magpie.spec.MagpieEvents
 import com.vitorpamplona.magpie.spec.MagpieReleaseEvent
 import com.vitorpamplona.magpie.spec.MagpieSnapshotEvent
@@ -36,14 +38,20 @@ import com.vitorpamplona.magpie.spec.WinnerSelection
 import com.vitorpamplona.quartz.nip01Core.core.Event
 import com.vitorpamplona.quartz.nip01Core.core.HexKey
 import com.vitorpamplona.quartz.nip01Core.relay.filters.Filter
+import com.vitorpamplona.quartz.nip01Core.relay.normalizer.RelayUrlNormalizer
 import com.vitorpamplona.quartz.nip01Core.signers.EventTemplate
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 
 public data class PublishSettings(
     val repoDir: File,
@@ -110,13 +118,42 @@ public class Publisher(
 ) {
     private fun now() = clock.nowMillis() / 1000
 
+    /** One signature at a time: remote signers answer in order, and a human may be approving. */
+    private val signing = Mutex()
+
+    /**
+     * Signs [template] and checks what came back: the expected key, exactly the template asked
+     * for, and a valid signature. A misbehaving bunker can't slip in another key or other tags.
+     */
+    private suspend fun signChecked(template: EventTemplate<*>): Event =
+        signing.withLock {
+            val expected = signer.pubKey()
+            val event = signer.sign(template)
+            val problem =
+                when {
+                    event.pubKey != expected -> "it is signed by ${PublicKeys.npub(event.pubKey)}, not ${PublicKeys.npub(expected)}"
+                    event.kind != template.kind -> "kind ${event.kind} instead of ${template.kind}"
+                    event.createdAt != template.createdAt -> "created_at changed"
+                    event.content != template.content -> "content changed"
+                    !event.tags.contentDeepEquals(template.tags) -> "tags changed"
+                    !EventVerification.isValid(event) -> "its id or signature is invalid"
+                    else -> null
+                }
+            if (problem != null) throw IllegalStateException("The signer returned an event that doesn't match the request ($problem). Nothing was published.")
+            event
+        }
+
     public suspend fun context(indexerRelays: List<String>): PublisherContext {
         val pubKey = signer.pubKey()
-        val events =
+        val result =
             nostr.query(
                 indexerRelays,
                 listOf(Filter(kinds = listOf(MagpieSpec.KIND_BLOSSOM_SERVERS, MagpieSpec.KIND_RELAY_LIST), authors = listOf(pubKey))),
             )
+        if (!result.anyAnswered) {
+            throw IllegalStateException("None of the relays (${indexerRelays.joinToString()}) answered, so your server and relay lists can't be read. Nothing was signed.")
+        }
+        val events = result.events
         val serverList = events.filter { it.kind == MagpieSpec.KIND_BLOSSOM_SERVERS && it.pubKey == pubKey }.maxByOrNull { it.createdAt }
         val relayList = events.filter { it.kind == MagpieSpec.KIND_RELAY_LIST && it.pubKey == pubKey }.maxByOrNull { it.createdAt }
         val servers =
@@ -124,6 +161,7 @@ public class Publisher(
                 ?.tags
                 ?.filter { it.size >= 2 && it[0] == "server" }
                 ?.map { it[1].trimEnd('/') }
+                ?.filter { it.toHttpUrlOrNull() != null }
                 ?.distinct()
                 .orEmpty()
         if (servers.isEmpty()) throw MissingServerListException(PublicKeys.npub(pubKey))
@@ -152,6 +190,10 @@ public class Publisher(
 
         if (settings.partial) {
             val hosted = host(files, context.servers, settings.dryRun)
+            if (settings.dryRun) {
+                log.lifecycle("Magpie: dry run; this host's ${files.size} files would upload, no partial manifest written")
+                return PublishResult(manifest.coordinate.toString(), manifest.sha256Hex(), null, 0, signer.signatures, emptyList())
+            }
             val dir = settings.partialDir ?: throw IllegalArgumentException("--partial needs a partial manifest directory")
             val out = File(dir, "${settings.partialName}.json")
             Files2.writeAtomically(out, manifest.toBytes())
@@ -175,6 +217,9 @@ public class Publisher(
         require(manifest.coordinate.version == settings.version && manifest.coordinate.group == settings.group) {
             "The partial manifests are for ${manifest.coordinate}, not ${settings.group}:…:${settings.version}"
         }
+        settings.rootArtifact?.let { root ->
+            require(manifest.coordinate.artifact == root) { "The partial manifests' root module is ${manifest.coordinate.artifact}, but this build publishes $root" }
+        }
         log.lifecycle("Magpie: merged ${partials.size} partial manifests into ${manifest.files.size} files")
 
         keyCheck?.verify(settings.group, signer.pubKey())
@@ -182,24 +227,35 @@ public class Publisher(
         val relays = (context.writeRelays + settings.publishRelays).ifEmpty { settings.indexerRelays }.distinct()
         if (!manifest.coordinate.isSnapshot) refuseOverwrite(manifest, context, (relays + settings.indexerRelays).distinct())
 
-        // Every blob must already be on a server, and every .module reference must be in the set.
-        val store = BlobStore(File(dir, ".blobs"))
-        val fetcher = BlobFetcher(http, store, log)
-        val absent = mutableListOf<String>()
+        // Every blob must already be on a server, at the size the manifest says.
+        val present = ConcurrentHashMap<String, MutableSet<String>>()
+        val wrongSize = ConcurrentHashMap.newKeySet<String>()
         coroutineScope {
             val gate = Semaphore(parallelism)
             manifest.files
-                .map { (key, file) ->
-                    async {
-                        gate.withPermit {
-                            if (context.servers.none { blossom.has(it, file.sha256) }) synchronized(absent) { absent += key }
+                .flatMap { (key, file) ->
+                    context.servers.map { server ->
+                        async {
+                            gate.withPermit {
+                                val size = blossom.size(server, file.sha256) ?: return@withPermit
+                                if (size >= 0 && size != file.size) {
+                                    wrongSize += "$key: $server has $size bytes, the partial manifest says ${file.size}"
+                                } else {
+                                    present.computeIfAbsent(file.sha256) { ConcurrentHashMap.newKeySet() } += server
+                                }
+                            }
                         }
                     }
                 }.awaitAll()
         }
+        if (wrongSize.isNotEmpty()) throw IllegalStateException("Refusing to sign: sizes disagree with the partial manifests:\n  " + wrongSize.sorted().joinToString("\n  "))
+        val absent = manifest.files.filter { (_, file) -> present[file.sha256].isNullOrEmpty() }.keys
         if (absent.isNotEmpty()) {
             throw IllegalStateException("Refusing to sign: these files are on none of ${context.servers}:\n  " + absent.sorted().joinToString("\n  "))
         }
+
+        // Every .module reference must be in the merged set.
+        val fetcher = BlobFetcher(http, BlobStore(File(dir, ".blobs")), log)
         val missing =
             ModuleChecker.missingReferences(manifest) { key ->
                 val entry = manifest[key]!!
@@ -211,7 +267,7 @@ public class Publisher(
                     missing.joinToString("\n  "),
             )
         }
-        return finish(manifest, emptyList(), context, relays, settings.dryRun)
+        return finish(manifest, emptyList(), context, relays, settings.dryRun, known = present)
     }
 
     private suspend fun finish(
@@ -220,22 +276,29 @@ public class Publisher(
         context: PublisherContext,
         relays: List<String>,
         dryRun: Boolean,
+        known: Map<String, Set<String>> = emptyMap(),
     ): PublishResult {
         val manifestBytes = manifest.toBytes()
         val manifestBlob = BlobSource(manifest.sha256Hex(), manifestBytes.size.toLong(), MagpieSpec.MANIFEST_CONTENT_TYPE, bytes = manifestBytes)
-        val hosted = host(files + manifestBlob, context.servers, dryRun)
+        val hosted = host(files + manifestBlob, context.servers, dryRun, known)
         if (dryRun) {
             log.lifecycle("Magpie: dry run; ${manifest.coordinate} checks passed, nothing uploaded or signed")
             return PublishResult(manifest.coordinate.toString(), manifestBlob.sha256, null, 0, signer.signatures, emptyList())
         }
 
+        // Hints: the servers that hold every file of the release, else every server that holds any.
+        val allBlobs = manifest.files.values.map { it.sha256 } + manifestBlob.sha256
+        val presence = allBlobs.associateWith { sha -> hosted.present[sha].orEmpty() + known[sha].orEmpty() }
+        val complete = context.servers.filter { s -> allBlobs.all { s in presence.getValue(it) } }
+        val hints = complete.ifEmpty { context.servers.filter { s -> presence.values.any { s in it } } }
+
         val template: EventTemplate<*> =
             if (manifest.coordinate.isSnapshot) {
-                MagpieSnapshotEvent.build(manifest, manifestBlob.sha256, manifestBlob.size, servers = hosted.servers, createdAt = now())
+                MagpieSnapshotEvent.build(manifest, manifestBlob.sha256, manifestBlob.size, servers = hints, createdAt = now())
             } else {
-                MagpieReleaseEvent.build(manifest, manifestBlob.sha256, manifestBlob.size, servers = hosted.servers, createdAt = now())
+                MagpieReleaseEvent.build(manifest, manifestBlob.sha256, manifestBlob.size, servers = hints, createdAt = now())
             }
-        val event = signer.sign(template)
+        val event = signChecked(template)
         val results = nostr.publish(relays, event)
         val accepted = results.filterValues { it }.keys.toList()
         if (accepted.isEmpty()) {
@@ -250,14 +313,18 @@ public class Publisher(
         return PublishResult(manifest.coordinate.toString(), manifestBlob.sha256, event.id, hosted.uploaded, signer.signatures, accepted)
     }
 
-    /** Fails if any module of [manifest] already has a release at this version by this key. */
+    /**
+     * Fails if any module of [manifest] already has a release at this version by this key, and
+     * also if that can't be known: an earlier release went to the publisher's write relays, so at
+     * least one of them must answer (any relay, when there are none). Silence is not "no".
+     */
     private suspend fun refuseOverwrite(
         manifest: Manifest,
         context: PublisherContext,
         relays: List<String>,
     ) {
         val modules = manifest.modules()
-        val existing =
+        val result =
             nostr.query(
                 relays,
                 listOf(
@@ -268,9 +335,18 @@ public class Publisher(
                     ),
                 ),
             )
+        val writeRelays = context.writeRelays.mapNotNull { RelayUrlNormalizer.normalizeOrNull(it)?.url }.toSet()
+        val confirmed = if (writeRelays.isEmpty()) result.anyAnswered else result.answered.any { it in writeRelays }
+        if (!confirmed) {
+            throw IllegalStateException(
+                "Can't confirm ${manifest.coordinate} isn't already released: " +
+                    (if (writeRelays.isEmpty()) "no relay" else "none of your write relays (${writeRelays.joinToString()})") +
+                    " answered. Nothing was signed; try again when they're reachable.",
+            )
+        }
         val clash =
             modules.firstNotNullOfOrNull { module ->
-                WinnerSelection.releasesFor(existing, module, manifest.coordinate.version, context.pubKey).firstOrNull()?.let { module to it }
+                WinnerSelection.releasesFor(result.events, module, manifest.coordinate.version, context.pubKey).firstOrNull()?.let { module to it }
             }
         if (clash != null) {
             throw VersionAlreadyReleasedException(
@@ -282,45 +358,48 @@ public class Publisher(
 
     private class Hosted(
         val uploaded: Int,
-        val servers: List<String>,
+        /** sha256 -> servers that now hold it. */
+        val present: Map<String, Set<String>>,
     )
 
     /**
      * Makes every blob present on at least one server. Checks first (HEAD and BUD-06 preflight),
-     * so a blob no server will take fails the publish before anything is signed; then uploads
-     * with one authorization for all hashes, falling back to one per blob where a server
-     * refuses the shared one.
+     * so a blob no server will take fails the publish before anything is signed; then uploads in
+     * parallel under one authorization for all hashes. A server that refuses it gets one
+     * authorization per blob (each signed once, for every such server); a server that refuses
+     * that too is given up on rather than costing a signature per blob.
      */
     private suspend fun host(
         blobs: List<BlobSource>,
         servers: List<String>,
         dryRun: Boolean,
+        known: Map<String, Set<String>> = emptyMap(),
     ): Hosted {
         val unique = blobs.distinctBy { it.sha256 }
-        // server -> blobs it lacks; blob -> servers that have it or say they'd take it.
-        val lacking = mutableMapOf<String, MutableList<BlobSource>>()
-        val hostable = unique.associate { it.sha256 to mutableListOf<String>() }
-        val refusals = mutableMapOf<String, MutableList<String>>()
+        val present = ConcurrentHashMap<String, MutableSet<String>>()
+        unique.forEach { present[it.sha256] = ConcurrentHashMap.newKeySet<String>().apply { addAll(known[it.sha256].orEmpty()) } }
+        val lacking = ConcurrentHashMap<String, MutableList<BlobSource>>()
+        val refusals = ConcurrentHashMap<String, MutableList<String>>()
+        val willTake = ConcurrentHashMap<String, MutableSet<String>>()
         coroutineScope {
             val gate = Semaphore(parallelism)
             servers
                 .flatMap { server ->
-                    unique.map { blob ->
+                    unique.filter { server !in present.getValue(it.sha256) }.map { blob ->
                         async {
                             gate.withPermit {
                                 if (blossom.has(server, blob.sha256)) {
-                                    synchronized(hostable) { hostable.getValue(blob.sha256) += server }
+                                    present.getValue(blob.sha256) += server
                                 } else {
                                     when (val preflight = blossom.preflight(server, blob)) {
                                         is Preflight.Refused -> {
-                                            synchronized(refusals) { refusals.getOrPut(blob.sha256) { mutableListOf() } += "$server: ${preflight.status} ${preflight.reason}" }
+                                            refusals.computeIfAbsent(blob.sha256) { java.util.Collections.synchronizedList(mutableListOf()) } +=
+                                                "$server: ${preflight.status} ${preflight.reason}"
                                         }
 
                                         else -> {
-                                            synchronized(hostable) {
-                                                hostable.getValue(blob.sha256) += server
-                                                lacking.getOrPut(server) { mutableListOf() } += blob
-                                            }
+                                            willTake.computeIfAbsent(blob.sha256) { ConcurrentHashMap.newKeySet() } += server
+                                            lacking.computeIfAbsent(server) { java.util.Collections.synchronizedList(mutableListOf()) } += blob
                                         }
                                     }
                                 }
@@ -329,45 +408,75 @@ public class Publisher(
                     }
                 }.awaitAll()
         }
-        val homeless = unique.filter { hostable.getValue(it.sha256).isEmpty() }
+        val homeless = unique.filter { present.getValue(it.sha256).isEmpty() && willTake[it.sha256].isNullOrEmpty() }
         if (homeless.isNotEmpty()) {
             throw IllegalStateException(
                 "No Blossom server can host these blobs, so nothing was signed:\n  " +
                     homeless.joinToString("\n  ") { "${it.sha256} (${it.size} bytes): ${refusals[it.sha256].orEmpty().joinToString("; ")}" },
             )
         }
-        if (dryRun || lacking.isEmpty()) {
-            return Hosted(0, servers.filter { s -> unique.all { s in hostable.getValue(it.sha256) } }.ifEmpty { servers })
-        }
+        if (dryRun || lacking.isEmpty()) return Hosted(0, present)
 
         val toUpload = lacking.values.flatten().distinctBy { it.sha256 }
-        val auth = signer.sign(BlossomClient.uploadAuth(toUpload.map { it.sha256 }, lacking.keys, now()))
-        val present = unique.associate { blob -> blob.sha256 to hostable.getValue(blob.sha256).filter { s -> lacking[s]?.none { it.sha256 == blob.sha256 } ?: true }.toMutableSet() }
-        var uploaded = 0
-        for ((server, list) in lacking) {
-            var perBlob = false
-            for (blob in list) {
-                var outcome = if (perBlob) null else blossom.upload(server, blob, auth)
-                if (outcome == null || (!outcome.ok && (outcome.status == 401 || outcome.status == 403) && toUpload.size > 1)) {
-                    if (!perBlob && outcome != null) log.info("$server refused the shared upload authorization (${outcome.reason}); signing one per blob")
-                    perBlob = true
-                    val single = signer.sign(BlossomClient.uploadAuth(listOf(blob.sha256), listOf(server), now()))
-                    outcome = blossom.upload(server, blob, single)
-                }
-                if (outcome.ok) {
-                    uploaded++
-                    present.getValue(blob.sha256) += server
-                } else {
-                    log.warn("Upload of ${blob.sha256} to $server failed: ${outcome.status} ${outcome.reason}")
-                }
+        val shared = signChecked(BlossomClient.uploadAuth(toUpload.map { it.sha256 }, lacking.keys, now()))
+        val sharedRefused = ConcurrentHashMap.newKeySet<String>()
+        val givenUp = ConcurrentHashMap.newKeySet<String>()
+        val perBlobWorks = ConcurrentHashMap.newKeySet<String>()
+        val probes = StripedMutex()
+        val perBlob = ConcurrentHashMap<String, Event>()
+        val perBlobLock = StripedMutex()
+        val uploaded = AtomicInteger()
+
+        suspend fun perBlobAuth(blob: BlobSource): Event =
+            perBlob[blob.sha256] ?: perBlobLock.forKey(blob.sha256).withLock {
+                perBlob[blob.sha256] ?: signChecked(BlossomClient.uploadAuth(listOf(blob.sha256), lacking.keys, now())).also { perBlob[blob.sha256] = it }
             }
+
+        coroutineScope {
+            val gate = Semaphore(parallelism)
+            lacking
+                .flatMap { (server, list) -> list.map { server to it } }
+                .map { (server, blob) ->
+                    async {
+                        gate.withPermit {
+                            if (server in givenUp) return@withPermit
+                            var outcome = if (server in sharedRefused) null else blossom.upload(server, blob, shared)
+                            if (outcome == null || (!outcome.ok && outcome.isAuthRefusal && toUpload.size > 1)) {
+                                if (sharedRefused.add(server) && outcome != null) {
+                                    log.info("$server refused the shared upload authorization (${outcome.reason}); using one per blob")
+                                }
+                                outcome =
+                                    if (server in perBlobWorks) {
+                                        blossom.upload(server, blob, perBlobAuth(blob))
+                                    } else {
+                                        // The first per-blob attempt on a server is a probe; the others wait for its
+                                        // verdict, so a server that refuses everything costs one signature, not one per blob.
+                                        probes.forKey(server).withLock {
+                                            if (server in givenUp) return@withPermit
+                                            blossom.upload(server, blob, perBlobAuth(blob)).also { probe ->
+                                                when {
+                                                    probe.ok -> perBlobWorks += server
+                                                    probe.isAuthRefusal && givenUp.add(server) -> log.warn("$server refuses uploads from this key (${probe.status} ${probe.reason}); skipping it")
+                                                }
+                                            }
+                                        }
+                                    }
+                            }
+                            if (outcome.ok) {
+                                uploaded.incrementAndGet()
+                                present.getValue(blob.sha256) += server
+                            } else if (server !in givenUp) {
+                                log.warn("Upload of ${blob.sha256} to $server failed: ${outcome.status} ${outcome.reason}")
+                            }
+                        }
+                    }
+                }.awaitAll()
         }
         val stillMissing = unique.filter { present.getValue(it.sha256).isEmpty() }
         if (stillMissing.isNotEmpty()) {
             throw IllegalStateException("These blobs could not be uploaded to any server, so the release was not signed:\n  " + stillMissing.joinToString("\n  ") { it.sha256 })
         }
-        val complete = servers.filter { s -> unique.all { s in present.getValue(it.sha256) } }
-        return Hosted(uploaded, complete.ifEmpty { servers.filter { s -> present.values.any { s in it } } })
+        return Hosted(uploaded.get(), present)
     }
 
     /** Publishes a kind 10063 Blossom server list. */
@@ -377,7 +486,7 @@ public class Publisher(
     ): Event {
         require(servers.isNotEmpty()) { "Give at least one Blossom server" }
         val tags = servers.map { arrayOf("server", it.trimEnd('/')) }.toTypedArray()
-        val event = signer.sign(EventTemplate<Event>(now(), MagpieSpec.KIND_BLOSSOM_SERVERS, tags, ""))
+        val event = signChecked(EventTemplate<Event>(now(), MagpieSpec.KIND_BLOSSOM_SERVERS, tags, ""))
         val results = nostr.publish(relays, event)
         if (results.values.none { it }) throw IllegalStateException("No relay accepted the server list (${relays.joinToString()})")
         log.lifecycle("Magpie: published Blossom server list ${servers.joinToString()} to ${results.filterValues { it }.size} relays")

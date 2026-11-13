@@ -20,12 +20,16 @@
  */
 package com.vitorpamplona.magpie.core.resolve
 
+import com.vitorpamplona.magpie.core.nostr.RelaysUnavailableException
 import com.vitorpamplona.magpie.core.util.Clock
+import com.vitorpamplona.magpie.core.util.ExpiringCache
 import com.vitorpamplona.magpie.core.util.MagpieLog
+import com.vitorpamplona.magpie.core.util.StripedMutex
 import com.vitorpamplona.magpie.spec.Coordinate
 import com.vitorpamplona.magpie.spec.MagpiePublicationEvent
 import com.vitorpamplona.magpie.spec.MagpieReleaseEvent
 import com.vitorpamplona.magpie.spec.MagpieSnapshotEvent
+import com.vitorpamplona.magpie.spec.MagpieSpec
 import com.vitorpamplona.magpie.spec.Manifest
 import com.vitorpamplona.magpie.spec.ModuleId
 import com.vitorpamplona.magpie.spec.PublicKeys
@@ -33,10 +37,8 @@ import com.vitorpamplona.magpie.spec.ReleaseSelection
 import com.vitorpamplona.magpie.spec.WinnerSelection
 import com.vitorpamplona.quartz.nip01Core.core.Event
 import com.vitorpamplona.quartz.nip01Core.core.HexKey
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
-import java.util.concurrent.ConcurrentHashMap
 
 public data class ResolverSettings(
     val relays: List<String>,
@@ -66,38 +68,23 @@ public class Resolver(
     private val log: MagpieLog,
     private val clock: Clock = Clock.SYSTEM,
 ) {
-    private class Timed<T>(
-        val value: T,
-        val expiresAt: Long,
-    )
-
-    private val releases = ConcurrentHashMap<String, MagpieReleaseEvent>()
-    private val snapshots = ConcurrentHashMap<String, Timed<MagpieSnapshotEvent?>>()
-    private val listings = ConcurrentHashMap<String, Timed<List<Event>>>()
-    private val serverLists = ConcurrentHashMap<String, Timed<List<String>>>()
-    private val misses = ConcurrentHashMap<String, Long>()
-    private val manifests = ConcurrentHashMap<String, Manifest>()
-    private val locks = ConcurrentHashMap<String, Mutex>()
+    private val releases = ExpiringCache<String, MagpieReleaseEvent>(MAX_ENTRIES, clock)
+    private val snapshots = ExpiringCache<String, MagpieSnapshotEvent?>(MAX_ENTRIES, clock)
+    private val listings = ExpiringCache<String, List<Event>>(MAX_ENTRIES, clock)
+    private val serverLists = ExpiringCache<String, List<String>>(MAX_ENTRIES, clock)
+    private val misses = ExpiringCache<String, Unit>(MAX_ENTRIES, clock)
+    private val manifests = ExpiringCache<String, Manifest>(MAX_ENTRIES, clock)
+    private val locks = StripedMutex()
 
     private val eventsDir = File(settings.cacheDir, "events")
 
     public suspend fun publisherFor(group: String): TrustedPublisher? = trust.publisherFor(group)
 
+    // Striped, so nothing nests: a block must never call single() again.
     private suspend fun <T> single(
         key: String,
         block: suspend () -> T,
-    ): T = locks.computeIfAbsent(key) { Mutex() }.withLock { block() }
-
-    private fun missed(key: String): Boolean {
-        val until = misses[key] ?: return false
-        if (until > clock.nowMillis()) return true
-        misses.remove(key, until)
-        return false
-    }
-
-    private fun miss(key: String) {
-        misses[key] = clock.nowMillis() + settings.negativeTtlMs
-    }
+    ): T = locks.forKey(key).withLock { block() }
 
     private fun eventFile(
         publisher: HexKey,
@@ -109,37 +96,52 @@ public class Resolver(
         module: ModuleId,
     ) = File(eventsDir, "$publisher/${module.group}/${module.artifact}/_module.json")
 
+    private fun releaseKey(
+        publisher: HexKey,
+        coordinate: Coordinate,
+    ) = "r:$publisher:$coordinate"
+
+    /** The lock first: if it refuses (a frozen lock), nothing is cached and every retry refuses too. */
+    private suspend fun accept(
+        key: String,
+        coordinate: Coordinate,
+        release: MagpieReleaseEvent,
+    ): MagpieReleaseEvent {
+        trust.recordRelease(coordinate, release)
+        releases.put(key, release, FOREVER)
+        return release
+    }
+
     /**
      * The canonical release of [coordinate] by [publisher], or null if there is none.
-     * Honors the lock; records the winner in it.
+     * Honors the lock and records the winner in it, on every use. Throws
+     * [com.vitorpamplona.magpie.core.nostr.RelaysUnavailableException] when no relay answers:
+     * an outage is not "no such release".
      */
     public suspend fun release(
         coordinate: Coordinate,
         publisher: HexKey,
     ): MagpieReleaseEvent? {
-        val key = "r:$publisher:$coordinate"
-        releases[key]?.let { return it }
+        val key = releaseKey(publisher, coordinate)
+        releases.get(key)?.let { return accept(key, coordinate, it) }
         return single(key) {
-            releases[key]?.let { return@single it }
+            releases.get(key)?.let { return@single accept(key, coordinate, it) }
             val locked = trust.lockedManifest(coordinate)
             val cacheFile = eventFile(publisher, coordinate)
 
-            // Disk first: a release we already accepted never changes.
-            val cached =
-                (WinnerSelection.release(query.readEvents(cacheFile), coordinate.module, coordinate.version, publisher, locked) as? ReleaseSelection.Found)?.release
-            if (cached != null) {
-                releases[key] = cached
-                trust.recordRelease(coordinate, cached)
-                return@single cached
-            }
-            if (!query.online || missed(key)) {
+            // Disk first: every candidate seen before, selected with this project's lock.
+            val cachedEvents = query.readEvents(cacheFile)
+            val cached = (WinnerSelection.release(cachedEvents, coordinate.module, coordinate.version, publisher, locked) as? ReleaseSelection.Found)?.release
+            if (cached != null) return@single accept(key, coordinate, cached)
+
+            if (!query.online || misses.contains(key)) {
                 if (locked != null && !query.online) {
                     throw MagpieSecurityException("magpie.lock pins $coordinate to manifest $locked, which is not in the offline cache.")
                 }
                 return@single null
             }
 
-            val events = query.releases(coordinate, publisher)
+            val events = query.releases(coordinate, publisher) + cachedEvents
             when (val selection = WinnerSelection.release(events, coordinate.module, coordinate.version, publisher, locked)) {
                 is ReleaseSelection.Found -> {
                     if (selection.shadowed.isNotEmpty()) {
@@ -148,10 +150,11 @@ public class Resolver(
                                 "(${if (locked != null) "pinned by magpie.lock" else "the earliest"}), ignoring ${selection.shadowed.joinToString { it.id }}",
                         )
                     }
-                    query.writeEvents(cacheFile, listOf(selection.release))
-                    releases[key] = selection.release
-                    trust.recordRelease(coordinate, selection.release)
-                    selection.release
+                    // Every candidate goes to the shared disk cache; each project selects with its own lock.
+                    query.writeEvents(cacheFile, WinnerSelection.releasesFor(events, coordinate.module, coordinate.version, publisher))
+                    val winner = accept(key, coordinate, selection.release)
+                    shareWithSiblings(winner, coordinate, publisher)
+                    winner
                 }
 
                 is ReleaseSelection.LockedReleaseMissing -> {
@@ -169,10 +172,49 @@ public class Resolver(
                 }
 
                 ReleaseSelection.NotFound -> {
-                    miss(key)
+                    misses.put(key, Unit, settings.negativeTtlMs)
                     null
                 }
             }
+        }
+    }
+
+    /**
+     * One release usually covers every module of a Kotlin Multiplatform library: remember it for
+     * the others (this build only, and only where the lock agrees), so Gradle asking for the
+     * root `.module` and then the platform one costs one relay query, not two. The lock records
+     * a module when it is actually resolved.
+     */
+    private fun shareWithSiblings(
+        release: MagpieReleaseEvent,
+        coordinate: Coordinate,
+        publisher: HexKey,
+    ) {
+        val manifest = release.manifest()?.sha256 ?: return
+        release.modules().filter { it != coordinate.module }.forEach { module ->
+            val sibling = runCatching { module.withVersion(coordinate.version) }.getOrNull() ?: return@forEach
+            val locked = trust.lockedManifest(sibling)
+            if (locked == null || locked == manifest) releases.put(releaseKey(publisher, sibling), release, settings.listingTtlMs)
+        }
+    }
+
+    /**
+     * Fresh events from relays, or, when none answers, what the disk cache has (with a warning).
+     * With nothing cached either, the outage propagates.
+     */
+    private suspend fun onlineOrCached(
+        cacheFile: File,
+        what: String,
+        fetch: suspend () -> List<Event>,
+    ): List<Event> {
+        val cached = query.readEvents(cacheFile)
+        if (!query.online) return cached
+        return try {
+            fetch() + cached
+        } catch (e: RelaysUnavailableException) {
+            if (cached.isEmpty()) throw e
+            log.warn("${e.message}; using the cached $what")
+            cached
         }
     }
 
@@ -182,19 +224,14 @@ public class Resolver(
         publisher: HexKey,
     ): MagpieSnapshotEvent? {
         val key = "s:$publisher:$coordinate"
-        snapshots[key]?.takeIf { it.expiresAt > clock.nowMillis() }?.let { return it.value }
+        if (snapshots.contains(key)) return snapshots.get(key)
         return single(key) {
-            snapshots[key]?.takeIf { it.expiresAt > clock.nowMillis() }?.let { return@single it.value }
+            if (snapshots.contains(key)) return@single snapshots.get(key)
             val cacheFile = eventFile(publisher, coordinate)
-            val events =
-                if (query.online) {
-                    query.snapshots(coordinate, publisher) + query.readEvents(cacheFile)
-                } else {
-                    query.readEvents(cacheFile)
-                }
+            val events = onlineOrCached(cacheFile, "snapshot of $coordinate") { query.snapshots(coordinate, publisher) }
             val newest = WinnerSelection.snapshot(events, coordinate.module, coordinate.version, publisher)
             if (newest != null) query.writeEvents(cacheFile, listOf(newest))
-            snapshots[key] = Timed(newest, clock.nowMillis() + if (newest == null) settings.negativeTtlMs else settings.listingTtlMs)
+            snapshots.put(key, newest, if (newest == null) settings.negativeTtlMs else settings.listingTtlMs)
             newest
         }
     }
@@ -205,19 +242,15 @@ public class Resolver(
         publisher: HexKey,
     ): List<Event> {
         val key = "m:$publisher:$module"
-        listings[key]?.takeIf { it.expiresAt > clock.nowMillis() }?.let { return it.value }
+        listings.get(key)?.let { return it }
         return single(key) {
-            listings[key]?.takeIf { it.expiresAt > clock.nowMillis() }?.let { return@single it.value }
+            listings.get(key)?.let { return@single it }
             val cacheFile = listingFile(publisher, module)
             val events =
-                if (query.online) {
-                    (query.moduleEvents(module, publisher) + query.readEvents(cacheFile)).distinctBy { it.id }.also {
-                        if (it.isNotEmpty()) query.writeEvents(cacheFile, it)
-                    }
-                } else {
-                    query.readEvents(cacheFile)
-                }
-            listings[key] = Timed(events, clock.nowMillis() + if (events.isEmpty()) settings.negativeTtlMs else settings.listingTtlMs)
+                onlineOrCached(cacheFile, "version list of $module") { query.moduleEvents(module, publisher) }
+                    .distinctBy { it.id }
+                    .also { if (it.isNotEmpty() && query.online) query.writeEvents(cacheFile, it) }
+            listings.put(key, events, if (events.isEmpty()) settings.negativeTtlMs else settings.listingTtlMs)
             events
         }
     }
@@ -248,14 +281,16 @@ public class Resolver(
     /** The manifest a publication pins, fetched and hash-checked once, then cached forever. */
     public suspend fun manifest(publication: MagpiePublicationEvent): Manifest {
         val pointer = publication.manifest() ?: throw IllegalStateException("Event ${publication.id} has no manifest")
-        manifests[pointer.sha256]?.let { return it }
-        val file = blob(pointer.sha256, pointer.size, publication)
+        manifests.get(pointer.sha256)?.let { return it }
+        // A missing or absurd size must not mean "no limit": cap what a server can stream at us.
+        val limit = pointer.size.takeIf { it in 0..MagpieSpec.MAX_MANIFEST_BYTES } ?: MagpieSpec.MAX_MANIFEST_BYTES
+        val file = blob(pointer.sha256, limit, publication)
         val manifest = Manifest.parse(file.readBytes())
         val expected = publication.coordinate()
         if (expected != null && manifest.coordinate.version != expected.version) {
             throw IllegalStateException("Manifest ${pointer.sha256} is for ${manifest.coordinate}, but event ${publication.id} is for $expected")
         }
-        manifests[pointer.sha256] = manifest
+        manifests.put(pointer.sha256, manifest, FOREVER)
         return manifest
     }
 
@@ -291,15 +326,26 @@ public class Resolver(
     }
 
     private suspend fun serverListOf(publisher: HexKey): List<String> {
-        serverLists[publisher]?.takeIf { it.expiresAt > clock.nowMillis() }?.let { return it.value }
-        val servers =
-            try {
-                query.blossomServers(publisher)
-            } catch (e: Exception) {
-                log.warn("Could not read the server list of ${PublicKeys.npub(publisher)}: ${e.message}")
-                emptyList()
-            }
-        serverLists[publisher] = Timed(servers, clock.nowMillis() + settings.serverListTtlMs)
-        return servers
+        val key = "srv:$publisher"
+        serverLists.get(key)?.let { return it }
+        // One query per publisher, however many blobs are waiting on it.
+        return single(key) {
+            serverLists.get(key)?.let { return@single it }
+            val servers =
+                try {
+                    query.blossomServers(publisher)
+                } catch (e: Exception) {
+                    log.warn("Could not read the server list of ${PublicKeys.npub(publisher)}: ${e.message}")
+                    emptyList()
+                }
+            // An empty answer may be an outage: ask again soon rather than in ten minutes.
+            serverLists.put(key, servers, if (servers.isEmpty()) settings.negativeTtlMs else settings.serverListTtlMs)
+            servers
+        }
+    }
+
+    private companion object {
+        const val MAX_ENTRIES = 10_000
+        const val FOREVER = Long.MAX_VALUE / 4
     }
 }

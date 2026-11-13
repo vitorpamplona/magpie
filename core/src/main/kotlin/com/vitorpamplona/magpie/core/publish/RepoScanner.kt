@@ -28,6 +28,7 @@ import com.vitorpamplona.magpie.spec.Manifest
 import com.vitorpamplona.magpie.spec.ManifestFile
 import com.vitorpamplona.magpie.spec.MavenPath
 import java.io.File
+import java.util.stream.Collectors
 
 /** A release on disk: its manifest and where each entry's bytes are. */
 public class ScannedRelease(
@@ -70,7 +71,7 @@ public object RepoScanner {
                         }
                     }
                 } ?: emptyList()
-            val newestStamp = parsed.mapNotNull { it.first.snapshotStamp }.maxOrNull()
+            val newestStamp = parsed.mapNotNull { it.first.snapshotStamp }.maxWithOrNull(MavenPath.SNAPSHOT_STAMP_ORDER)
             parsed
                 .filter { (path, _) ->
                     !coordinate.isSnapshot || newestStamp == null || path.snapshotStamp == null ||
@@ -81,7 +82,12 @@ public object RepoScanner {
         val manifest =
             Manifest(
                 Coordinate(group, rootArtifact, version),
-                found.mapValues { (_, file) -> ManifestFile(Hashing.sha256(file), file.length()) },
+                found.entries
+                    .toList()
+                    .parallelStream()
+                    .map { (key, file) -> key to ManifestFile(Hashing.sha256(file), file.length()) }
+                    .collect(Collectors.toList())
+                    .toMap(),
             )
         return ScannedRelease(manifest, found)
     }
