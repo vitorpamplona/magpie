@@ -24,8 +24,13 @@ import com.vitorpamplona.crypto.sha2.sha256
 import com.vitorpamplona.quartz.nip01Core.core.toHexKey
 import com.vitorpamplona.quartz.utils.jcs.JsonCanonicalization
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
 
@@ -61,16 +66,13 @@ public data class Manifest(
     }
 
     /** The Maven modules (artifactIds) of this release: the root first, then every other one with files, sorted. */
-    val artifacts: List<String>
-        get() {
-            val others =
-                files.keys
-                    .map { it.substringBefore('/') }
-                    .filter { it != coordinate.artifact }
-                    .distinct()
-                    .sorted()
-            return listOf(coordinate.artifact) + others
-        }
+    // Indexed once: the router asks for one artifact's files on every request.
+    private val byArtifact: Map<String, Map<String, ManifestFile>> by lazy {
+        files.entries.groupBy({ it.key.substringBefore('/') }, { it.key.substringAfterLast('/') to it.value }).mapValues { it.value.toMap() }
+    }
+
+    /** The Maven modules (artifactIds) of this release: the root first, then every other one with files, sorted. */
+    val artifacts: List<String> by lazy { listOf(coordinate.artifact) + byArtifact.keys.filter { it != coordinate.artifact }.sorted() }
 
     public fun modules(): List<ModuleId> = artifacts.map { ModuleId(coordinate.group, it) }
 
@@ -90,11 +92,8 @@ public data class Manifest(
     /** The manifest blob's sha256: its Blossom address. */
     public fun sha256Hex(): String = sha256(toBytes()).toHexKey()
 
-    /** Every file of [module] (an artifactId) in this release, by file name. */
-    public fun filesOf(artifact: String): Map<String, ManifestFile> =
-        files
-            .filterKeys { it.substringBefore('/') == artifact }
-            .mapKeys { it.key.substringAfterLast('/') }
+    /** Every file of [artifact] in this release, by file name. */
+    public fun filesOf(artifact: String): Map<String, ManifestFile> = byArtifact[artifact].orEmpty()
 
     private fun keyProblem(key: String): String? {
         val parts = key.split('/')
@@ -111,13 +110,28 @@ public data class Manifest(
         private val json = Json { ignoreUnknownKeys = true }
 
         /** Parses a manifest blob. Unknown fields are ignored; a newer [schema] is refused. */
-        public fun parse(text: String): Manifest {
-            val root = json.parseToJsonElement(text) as? JsonObject ?: throw IllegalArgumentException("Manifest is not an object")
-            val schema = (root["schema"] as? JsonPrimitive)?.intOrNull ?: throw IllegalArgumentException("Manifest has no schema")
+        public fun parse(text: String): Manifest = parse(json.parseToJsonElement(text))
+
+        /**
+         * Parses a manifest blob, which must be canonical (RFC 8785) JSON: the bytes that were
+         * hashed are exactly what every reader sees, with no duplicate keys or alternative
+         * spellings for two readers to disagree about.
+         */
+        public fun parse(bytes: ByteArray): Manifest {
+            val text = bytes.decodeToString()
+            val element = json.parseToJsonElement(text)
+            require(JsonCanonicalization.canonicalize(plain(element)) == text) { "Manifest is not canonical JSON (RFC 8785)" }
+            return parse(element)
+        }
+
+        private fun parse(element: JsonElement): Manifest {
+            val root = element as? JsonObject ?: throw IllegalArgumentException("Manifest is not an object")
+            val schema = (root["schema"] as? JsonPrimitive)?.takeIf { !it.isString }?.intOrNull ?: throw IllegalArgumentException("Manifest has no numeric schema")
+            require(schema >= 1) { "Manifest schema $schema is not valid" }
             require(schema <= MagpieSpec.MANIFEST_SCHEMA) { "Manifest schema $schema is newer than this Magpie understands" }
             val coordinate =
                 Coordinate.parse(
-                    (root["coordinate"] as? JsonPrimitive)?.content ?: throw IllegalArgumentException("Manifest has no coordinate"),
+                    (root["coordinate"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: throw IllegalArgumentException("Manifest has no coordinate"),
                 )
             val files = root["files"] as? JsonObject ?: throw IllegalArgumentException("Manifest has no files")
             return Manifest(
@@ -126,16 +140,28 @@ public data class Manifest(
                     files.mapValues { (key, value) ->
                         val obj = value as? JsonObject ?: throw IllegalArgumentException("Entry $key is not an object")
                         ManifestFile(
-                            sha256 =
-                                (obj["sha256"] as? JsonPrimitive)?.content ?: throw IllegalArgumentException("Entry $key has no sha256"),
-                            size = (obj["size"] as? JsonPrimitive)?.longOrNull ?: throw IllegalArgumentException("Entry $key has no size"),
+                            sha256 = (obj["sha256"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: throw IllegalArgumentException("Entry $key has no sha256"),
+                            size = (obj["size"] as? JsonPrimitive)?.takeIf { !it.isString }?.longOrNull ?: throw IllegalArgumentException("Entry $key has no numeric size"),
                         )
                     },
                 schema = schema,
             )
         }
 
-        public fun parse(bytes: ByteArray): Manifest = parse(bytes.decodeToString())
+        /** A JSON tree as the plain values [JsonCanonicalization] takes. */
+        private fun plain(element: JsonElement): Any? =
+            when (element) {
+                is JsonNull -> null
+                is JsonObject -> element.mapValues { plain(it.value) }
+                is JsonArray -> element.map { plain(it) }
+                is JsonPrimitive ->
+                    when {
+                        element.isString -> element.content
+                        element.booleanOrNull != null -> element.booleanOrNull
+                        element.longOrNull != null -> element.longOrNull
+                        else -> element.doubleOrNull
+                    }
+            }
 
         /**
          * Merges the partial manifests that several CI hosts produced for one release. The same

@@ -127,11 +127,50 @@ class ManifestTest {
 
     @Test
     fun primaryFiles() {
+        val c = Coordinate("com.example", "lib", "1.0")
+
+        fun primary(name: String) = isPrimaryFile(MavenPath.parseFile(c, name)!!)
         listOf("lib-1.0.jar", "lib-1.0.aar", "lib-1.0.klib", "lib-1.0.pom", "lib-1.0.module", "lib-1.0-cinterop-x.klib").forEach {
-            assertEquals(true, isPrimaryFile(it), it)
+            assertEquals(true, primary(it), it)
         }
-        listOf("lib-1.0-sources.jar", "lib-1.0-javadoc.jar", "lib-1.0.jar.asc", "lib-1.0-kotlin-tooling-metadata.json").forEach {
-            assertEquals(false, isPrimaryFile(it), it)
+        listOf("lib-1.0-sources.jar", "lib-1.0-javadoc.jar", "lib-1.0.jar.asc", "lib-1.0-kotlin-tooling-metadata.json", "lib-1.0-tests.jar", "lib-1.0-all.jar").forEach {
+            assertEquals(false, primary(it), it)
         }
+    }
+
+    @Test
+    fun theRootModulesPrimariesComeFirst() {
+        val m =
+            Manifest(
+                Coordinate("com.example", "lib", "1.0"),
+                mapOf(
+                    "lib-jvm/1.0/lib-jvm-1.0.jar" to ManifestFile("1".repeat(64), 1),
+                    "lib-iosarm64/1.0/lib-iosarm64-1.0.module" to ManifestFile("2".repeat(64), 1),
+                    "lib/1.0/lib-1.0.pom" to ManifestFile("3".repeat(64), 1),
+                    "lib/1.0/lib-1.0.module" to ManifestFile("4".repeat(64), 1),
+                ),
+            )
+        assertEquals(listOf("4", "3").map { it.repeat(64) }, primaryHashesOf(m).take(2))
+    }
+
+    @Test
+    fun manifestBlobsMustBeCanonicalAndTyped() {
+        val good = Manifest(coordinate, mapOf("lib/1.0/lib-1.0.jar" to ManifestFile(a, 1)))
+        assertEquals(good, Manifest.parse(good.toBytes()))
+        // Duplicate keys: two readers could see different files under one hash.
+        val dup = """{"coordinate":"com.example:lib:1.0","files":{"lib/1.0/lib-1.0.jar":{"sha256":"$a","size":1},"lib/1.0/lib-1.0.jar":{"sha256":"$b","size":1}},"schema":1}"""
+        assertFailsWith<IllegalArgumentException> { Manifest.parse(dup.encodeToByteArray()) }
+        // Whitespace or unsorted keys are not the canonical form.
+        assertFailsWith<IllegalArgumentException> { Manifest.parse(good.toCanonicalJson().replace(",", ", ").encodeToByteArray()) }
+        assertFailsWith<IllegalArgumentException> { Manifest.parse("""{"schema":0,"coordinate":"com.example:lib:1.0","files":{}}""") }
+        assertFailsWith<IllegalArgumentException> {
+            Manifest.parse("""{"schema":1,"coordinate":"com.example:lib:1.0","files":{"lib/1.0/lib-1.0.jar":{"sha256":"$a","size":"12"}}}""")
+        }
+    }
+
+    @Test
+    fun segmentsWindowsWouldRewriteAreRejected() {
+        listOf("...", "lib.", ".lib", "CON", "nul", "com1", "aux.txt").forEach { assertEquals(false, isValidSegment(it), it) }
+        listOf("lib", "1.0.0", "con-lib", "lib.con").forEach { assertEquals(true, isValidSegment(it), it) }
     }
 }

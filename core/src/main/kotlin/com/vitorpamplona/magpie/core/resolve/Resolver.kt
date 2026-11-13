@@ -265,15 +265,9 @@ public class Resolver(
     ): List<VersionEntry> {
         val events = moduleEvents(module, publisher)
         val releaseEntries =
-            WinnerSelection.releasesByVersion(events, module, publisher).map { winner ->
-                val version = winner.version()!!
+            WinnerSelection.releasesGroupedByVersion(events, module, publisher).map { (version, candidates) ->
                 val locked = trust.lockedManifest(module.withVersion(version))
-                val chosen =
-                    if (locked != null && locked != winner.manifest()?.sha256) {
-                        WinnerSelection.releasesFor(events, module, version, publisher).firstOrNull { it.manifest()?.sha256 == locked } ?: winner
-                    } else {
-                        winner
-                    }
+                val chosen = locked?.let { pin -> candidates.firstOrNull { it.manifest()?.sha256 == pin } } ?: candidates.first()
                 VersionEntry(version, chosen.createdAt)
             }
         val snapshotEntries =

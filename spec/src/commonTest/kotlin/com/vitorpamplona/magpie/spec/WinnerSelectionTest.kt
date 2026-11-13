@@ -194,4 +194,47 @@ class WinnerSelectionTest {
         assertEquals(alice.pubKey, PublicKeys.parseOrNull(alice.pubKey))
         assertNull(PublicKeys.parseOrNull("nsec1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsmhltgl"))
     }
+
+    @Test
+    fun nonHexSignaturesDoNotVerify() {
+        val r = release(alice, "1.0", 100)
+        // A hex pair rewritten as non-hex must fail, whatever a lenient decoder makes of it.
+        val forged = "zz" + r.sig.substring(2)
+        assertFalse(EventVerification.isValid(MagpieReleaseEvent(r.id, r.pubKey, r.createdAt, r.tags, r.content, forged)))
+        assertFalse(EventVerification.isValid(MagpieReleaseEvent(r.id, r.pubKey, r.createdAt, r.tags, r.content, r.sig.uppercase())))
+    }
+
+    @Test
+    fun aManifestTagWithoutASizeIsNotWellFormed() {
+        val m = manifest("1.0", 'a')
+        val event = release(alice, "1.0", 100)
+        val tags = event.tags.map { if (it[0] == MagpieSpec.TAG_MANIFEST) arrayOf(it[0], it[1]) else it }.toTypedArray()
+        val unsized = alice.signed(EventTemplate<MagpieReleaseEvent>(100, MagpieSpec.KIND_RELEASE, tags, "")) as MagpieReleaseEvent
+        assertFalse(unsized.isWellFormed())
+        assertEquals(m.sha256Hex(), unsized.manifest()?.sha256)
+    }
+
+    @Test
+    fun releasesGroupByVersionInOnePass() {
+        val a = release(alice, "1.0", 100, 'a')
+        val b = release(alice, "1.0", 50, 'b')
+        val c = release(alice, "2.0", 200, 'c')
+        val grouped = WinnerSelection.releasesGroupedByVersion(listOf(a, c, b), module, alice.pubKey)
+        assertEquals(listOf("1.0", "2.0"), grouped.keys.toList())
+        assertEquals(listOf(b.id, a.id), grouped.getValue("1.0").map { it.id })
+    }
+
+    @Test
+    fun anNsecIsNeverEchoed() {
+        val secret = "nostr:nsec1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsmhltgl"
+        val error = kotlin.test.assertFailsWith<IllegalArgumentException> { PublicKeys.parse(secret) }
+        assertTrue("nsec1" !in error.message!!, error.message)
+        assertTrue("private key" in error.message!!)
+    }
+
+    @Test
+    fun numericGroupsAreNotHosts() {
+        assertNull(ReleaseIdentity.hostOf("1.0.0.127"))
+        assertEquals("example.com", ReleaseIdentity.hostOf("com.example"))
+    }
 }

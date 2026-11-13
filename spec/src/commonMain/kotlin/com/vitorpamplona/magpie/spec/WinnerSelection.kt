@@ -33,15 +33,21 @@ import com.vitorpamplona.quartz.utils.Secp256k1InstanceKotlin
 public object EventVerification {
     public fun isValid(event: Event): Boolean =
         try {
-            event.id.length == 64 &&
-                event.pubKey.length == 64 &&
-                event.sig.length == 128 &&
+            isLowerHex(event.id, 64) &&
+                isLowerHex(event.pubKey, 64) &&
+                isLowerHex(event.sig, 128) &&
                 EventHasher.hashIdCheck(event.id, event.pubKey, event.createdAt, event.kind, event.tags, event.content) &&
                 Secp256k1InstanceKotlin.verifySchnorr(Hex.decode(event.sig), Hex.decode(event.id), Hex.decode(event.pubKey))
         } catch (e: Exception) {
             false
         }
 }
+
+// Quartz's hex decoder tolerates non-hex characters; a rewritten signature must not verify.
+private fun isLowerHex(
+    value: String,
+    length: Int,
+): Boolean = value.length == length && value.all { it in '0'..'9' || it in 'a'..'f' }
 
 /** The outcome of picking the canonical release of one version. */
 public sealed interface ReleaseSelection {
@@ -140,6 +146,23 @@ public object WinnerSelection {
             .sortedWith(RELEASE_ORDER)
             .distinctBy { it.version() }
             .toList()
+
+    /**
+     * Every release of [module] by [publisher], grouped by version in one pass, each group
+     * earliest first; groups ordered by their earliest release.
+     */
+    public fun releasesGroupedByVersion(
+        events: Collection<Event>,
+        module: ModuleId,
+        publisher: HexKey,
+    ): Map<String, List<MagpieReleaseEvent>> =
+        events
+            .asSequence()
+            .mapNotNull { MagpieEvents.wrap(it) as? MagpieReleaseEvent }
+            .filter { it.pubKey == publisher && module.key in it.moduleKeys() && it.isWellFormed() }
+            .distinctBy { it.id }
+            .sortedWith(RELEASE_ORDER)
+            .groupBy { it.version()!! }
 
     /** Every snapshot version of [module] the publisher has, newest build of each. */
     public fun snapshotsByVersion(

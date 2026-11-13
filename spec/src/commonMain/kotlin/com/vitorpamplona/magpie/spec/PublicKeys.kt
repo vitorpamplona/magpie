@@ -39,17 +39,17 @@ public object PublicKeys {
         }
     }
 
-    public fun parse(value: String): HexKey =
-        requireNotNull(parseOrNull(value)) {
-            if (value.trim().startsWith(
-                    "nsec",
-                )
-            ) {
-                "That is a private key (nsec). Configure the publisher's npub."
+    public fun parse(value: String): HexKey {
+        val stripped = value.trim().removePrefix("nostr:")
+        return requireNotNull(parseOrNull(value)) {
+            // Never echo the input: it may be a secret pasted by mistake.
+            if (stripped.startsWith("nsec") || stripped.startsWith("ncryptsec")) {
+                "That is a private key, not a public one. Configure the publisher's npub (and treat that private key as leaked if it was committed)."
             } else {
-                "Not a public key: '$value'"
+                "Not a public key (expected npub1…, nprofile1… or 64 hex characters)"
             }
         }
+    }
 
     public fun npub(hex: HexKey): String = NPub.create(hex)
 }

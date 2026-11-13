@@ -80,6 +80,8 @@ public sealed interface MavenPath {
     public companion object {
         public const val METADATA_FILE: String = "maven-metadata.xml"
 
+        private val COMPOUND_EXTENSIONS = listOf("tar.gz", "tar.bz2", "tar.xz")
+
         private val SNAPSHOT_STAMP = Regex("""^(\d{8}\.\d{6}-\d+)""")
 
         /**
@@ -106,6 +108,10 @@ public sealed interface MavenPath {
                     if (isSnapshotVersion(parent) && segments.size >= 4) {
                         val group = segments.subList(0, segments.size - 3).joinToString(".")
                         VersionMetadata(Coordinate(group, segments[segments.size - 3], parent), checksum)
+                    } else if (segments.size >= 4 && parent.first().isDigit()) {
+                        // `lib/1.0/maven-metadata.xml`: a release directory, which has no metadata of
+                        // its own (artifactIds don't start with a digit; versions do).
+                        return null
                     } else {
                         val group = segments.subList(0, segments.size - 2).joinToString(".")
                         ArtifactMetadata(ModuleId(group, parent), checksum)
@@ -151,25 +157,23 @@ public sealed interface MavenPath {
                     }
                 }
 
-            val classifier: String?
-            val extension: String
-            when {
-                rest.startsWith("-") -> {
-                    val dot = rest.indexOf('.')
-                    if (dot <= 1 || dot == rest.length - 1) return null
-                    classifier = rest.substring(1, dot)
-                    extension = rest.substring(dot + 1)
+            // After the version comes either "-classifier.ext" or ".ext": nothing else, so
+            // lib-1.0.1.jar is not a file of lib:1.0.
+            if (rest.length < 2 || (rest[0] != '.' && rest[0] != '-')) return null
+            val signature = rest.endsWith(".asc")
+            val core = if (signature) rest.removeSuffix(".asc") else rest
+            // The extension is the last dotted part (or a known compound one), so a classifier
+            // may contain dots: lib-1.0-jdk1.8.jar is classifier "jdk1.8", extension "jar".
+            val ext = COMPOUND_EXTENSIONS.firstOrNull { core.endsWith(".$it") } ?: core.substringAfterLast('.', "")
+            if (ext.isEmpty() || !core.endsWith(".$ext")) return null
+            val middle = core.removeSuffix(".$ext")
+            val classifier =
+                when {
+                    middle.isEmpty() -> null
+                    middle.length > 1 && middle[0] == '-' -> middle.substring(1)
+                    else -> return null
                 }
-
-                rest.startsWith(".") && rest.length > 1 -> {
-                    classifier = null
-                    extension = rest.substring(1)
-                }
-
-                else -> {
-                    return null
-                }
-            }
+            val extension = if (signature) "$ext.asc" else ext
             return ArtifactFile(coordinate, fileName, classifier, extension, stamp, checksum)
         }
     }

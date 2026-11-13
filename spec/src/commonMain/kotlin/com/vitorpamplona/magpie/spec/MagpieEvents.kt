@@ -45,31 +45,37 @@ public abstract class MagpiePublicationEvent(
     content: String,
     sig: HexKey,
 ) : Event(id, pubKey, createdAt, kind, tags, content, sig) {
+    // Tags are read once: selection calls these accessors for every event, many times.
+    private val parsedModuleKeys: List<String> by lazy { tags.values(MagpieSpec.TAG_MODULE) }
+    private val parsedModules: List<ModuleId> by lazy { parsedModuleKeys.mapNotNull { ModuleId.parseOrNull(it) } }
+    private val parsedVersion: String? by lazy { tags.firstValue(MagpieSpec.TAG_VERSION) }
+    private val parsedManifest: ManifestPointer? by lazy {
+        val tag = tags.firstOrNull { it.size >= 2 && it[0] == MagpieSpec.TAG_MANIFEST }
+        val sha = tag?.get(1)?.lowercase()
+        if (tag == null || sha == null || !isSha256Hex(sha)) null else ManifestPointer(sha, tag.getOrNull(2)?.toLongOrNull() ?: -1)
+    }
+
     /** Module keys (`group:artifact`) the event covers, root first. */
-    public fun moduleKeys(): List<String> = tags.values(MagpieSpec.TAG_MODULE)
+    public fun moduleKeys(): List<String> = parsedModuleKeys
 
-    public fun modules(): List<ModuleId> = moduleKeys().mapNotNull { ModuleId.parseOrNull(it) }
+    public fun modules(): List<ModuleId> = parsedModules
 
-    public fun version(): String? = tags.firstValue(MagpieSpec.TAG_VERSION)
+    public fun version(): String? = parsedVersion
 
     /** The root coordinate: the first module at [version]. */
     public fun coordinate(): Coordinate? {
-        val module = modules().firstOrNull() ?: return null
-        val version = version() ?: return null
+        val module = parsedModules.firstOrNull() ?: return null
+        val version = parsedVersion ?: return null
         return runCatching { module.withVersion(version) }.getOrNull()
     }
 
     public fun covers(
         module: ModuleId,
         version: String,
-    ): Boolean = version() == version && module.key in moduleKeys()
+    ): Boolean = parsedVersion == version && module.key in parsedModuleKeys
 
-    public fun manifest(): ManifestPointer? {
-        val tag = tags.firstOrNull { it.size >= 2 && it[0] == MagpieSpec.TAG_MANIFEST } ?: return null
-        val sha = tag[1].lowercase()
-        if (!isSha256Hex(sha)) return null
-        return ManifestPointer(sha, tag.getOrNull(2)?.toLongOrNull() ?: -1)
-    }
+    /** The manifest pointer; size -1 when the tag doesn't give a usable one. */
+    public fun manifest(): ManifestPointer? = parsedManifest
 
     /** Every `x` hash: the manifest and the primary artifacts. */
     public fun hashes(): List<String> = tags.values(MagpieSpec.TAG_HASH)
@@ -77,8 +83,12 @@ public abstract class MagpiePublicationEvent(
     /** Blossom server base URLs the publisher uploaded to. */
     public fun servers(): List<String> = tags.values(MagpieSpec.TAG_SERVER)
 
-    /** Structurally valid: has modules, a version, and a manifest. */
-    public open fun isWellFormed(): Boolean = modules().isNotEmpty() && version() != null && manifest() != null && coordinate() != null
+    /** Structurally valid: has modules, a version, and a manifest with a plausible size. */
+    public open fun isWellFormed(): Boolean =
+        modules().isNotEmpty() &&
+            version() != null &&
+            manifest()?.size?.let { it in 0..MagpieSpec.MAX_MANIFEST_BYTES } == true &&
+            coordinate() != null
 }
 
 /** A regular, immutable release. */
@@ -166,20 +176,34 @@ public class MagpieSnapshotEvent(
 }
 
 /** The files a `#x` lookup should find: jars, aars, klibs, POMs and Gradle module metadata. */
-public fun primaryHashesOf(manifest: Manifest): List<String> =
-    manifest.files.entries
-        .filter { (key, _) -> isPrimaryFile(key.substringAfterLast('/')) }
-        .sortedBy { it.key }
-        .map { it.value.sha256 }
+public fun primaryHashesOf(manifest: Manifest): List<String> {
+    val root = manifest.coordinate
+    return manifest.files.entries
+        .mapNotNull { (key, file) ->
+            val parts = key.split('/')
+            val path = MavenPath.parseFile(Coordinate(root.group, parts[0], parts[1]), parts[2]) ?: return@mapNotNull null
+            if (!isPrimaryFile(path)) return@mapNotNull null
+            // The root module first (if the size budget cuts, it cuts the platform modules), and
+            // within a module: Gradle metadata, then the POM, then the artifact.
+            val rank =
+                when (path.extension) {
+                    "module" -> 0
+                    "pom" -> 1
+                    else -> 2
+                }
+            Triple(if (parts[0] == root.artifact) 0 else 1, rank, key) to file.sha256
+        }.sortedWith(compareBy({ it.first.first }, { it.first.second }, { it.first.third }))
+        .map { it.second }
         .distinct()
-
-/** Primary files: the main jar/aar/klib (no classifier or a cinterop one), the POM and the `.module`. */
-public fun isPrimaryFile(fileName: String): Boolean {
-    if (fileName.endsWith(".asc")) return false
-    if (fileName.endsWith(".pom") || fileName.endsWith(".module")) return true
-    if (!(fileName.endsWith(".jar") || fileName.endsWith(".aar") || fileName.endsWith(".klib"))) return false
-    return !(fileName.endsWith("-sources.jar") || fileName.endsWith("-javadoc.jar") || fileName.endsWith("-html-doc.jar"))
 }
+
+/** Primary files: `.module`, `.pom`, and the main jar/aar/klib (no classifier, or a cinterop one). */
+public fun isPrimaryFile(file: MavenPath.ArtifactFile): Boolean =
+    when (file.extension) {
+        "module", "pom" -> file.classifier == null
+        "jar", "aar", "klib" -> file.classifier == null || file.classifier.startsWith("cinterop-")
+        else -> false
+    }
 
 private fun publicationTags(
     manifest: Manifest,

@@ -41,6 +41,8 @@ public object ReleaseIdentity {
     public fun hostOf(group: String): String? {
         val labels = group.lowercase().split('.').reversed()
         if (labels.size < 2 || labels.any { !isDnsLabel(it) }) return null
+        // An all-numeric top-level label would make the "host" an IP address.
+        if (labels.last().all { it in '0'..'9' }) return null
         return labels.joinToString(".")
     }
 

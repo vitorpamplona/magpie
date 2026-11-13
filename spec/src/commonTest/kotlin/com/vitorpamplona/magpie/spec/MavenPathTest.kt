@@ -160,4 +160,31 @@ class MavenPathTest {
         assertNull(MavenPath.parse("lib"))
         assertNull(MavenPath.parse(""))
     }
+
+    @Test
+    fun theVersionMustEndAtADashOrDot() {
+        assertNull(MavenPath.parse("com/example/lib/1.0/lib-1.0.1.jar"))
+        assertNull(MavenPath.parse("com/example/lib/1.0/lib-1.0x.jar"))
+    }
+
+    @Test
+    fun classifiersMayContainDots() {
+        val f = file("com/example/lib/1.0/lib-1.0-jdk1.8.jar")
+        assertEquals("jdk1.8", f.classifier)
+        assertEquals("jar", f.extension)
+        assertEquals("tar.gz", file("com/example/lib/1.0/lib-1.0-dist.tar.gz").extension)
+        assertEquals("jar.asc", file("com/example/lib/1.0/lib-1.0-jdk1.8.jar.asc").extension)
+    }
+
+    @Test
+    fun aReleaseDirectoryHasNoMetadata() {
+        assertNull(MavenPath.parse("com/example/lib/1.0/maven-metadata.xml"))
+        assertIs<MavenPath.ArtifactMetadata>(MavenPath.parse("com/example/lib/maven-metadata.xml"))
+    }
+
+    @Test
+    fun snapshotStampsOrderByBuildNumber() {
+        val stamps = listOf("20261113.101010-9", "20261113.101010-10", "20261112.235959-99")
+        assertEquals("20261113.101010-10", stamps.maxWithOrNull(MavenPath.SNAPSHOT_STAMP_ORDER))
+    }
 }

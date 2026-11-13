@@ -85,9 +85,14 @@ public fun isSnapshotVersion(version: String): Boolean = version.endsWith("-SNAP
 /** A path segment Maven accepts as an artifactId or a version: no separators, no traversal. */
 public fun isValidSegment(value: String): Boolean =
     value.isNotEmpty() &&
-        value != "." &&
-        value != ".." &&
+        // Leading or trailing dots and device names: Windows rewrites or aliases those paths.
+        !value.startsWith('.') &&
+        !value.endsWith('.') &&
+        value.substringBefore('.').uppercase() !in WINDOWS_RESERVED &&
         value.length <= 200 &&
         value.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it == '.' || it == '-' || it == '_' || it == '+' }
+
+private val WINDOWS_RESERVED: Set<String> =
+    setOf("CON", "PRN", "AUX", "NUL") + (1..9).flatMap { listOf("COM$it", "LPT$it") }
 
 public fun isValidGroup(value: String): Boolean = value.isNotEmpty() && value.split('.').all { isValidSegment(it) }
