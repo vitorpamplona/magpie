@@ -31,3 +31,10 @@ dependencies {
 tasks.test {
     useJUnit()
 }
+
+// Quartz's secp256k1 JNI (used to sign test events) needs Java 21.
+listOf("testCompileClasspath", "testRuntimeClasspath").forEach { name ->
+    configurations.named(name) {
+        attributes { attribute(TargetJvmVersion.TARGET_JVM_VERSION_ATTRIBUTE, 21) }
+    }
+}
