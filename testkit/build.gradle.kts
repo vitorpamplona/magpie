@@ -25,7 +25,7 @@ dependencies {
     implementation(libs.ktor.server.websockets)
 
     testImplementation(libs.kotlin.test)
-    testImplementation(libs.okhttp)
+    implementation(libs.okhttp)
 }
 
 tasks.test {
