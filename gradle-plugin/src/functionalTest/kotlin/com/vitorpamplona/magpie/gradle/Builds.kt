@@ -163,8 +163,13 @@ class Builds : AutoCloseable {
                 .withArguments(args.toList() + listOf("--stacktrace"))
                 .withEnvironment(System.getenv() + env)
                 .forwardOutput()
+        // -Pmagpie.gradleVersion=8.14.3 (downloaded) or a local installation's directory.
         val version = System.getProperty("magpie.gradleVersion").orEmpty()
-        return if (version.isNotBlank()) runner.withGradleVersion(version) else runner
+        return when {
+            version.isBlank() -> runner
+            File(version).isDirectory -> runner.withGradleInstallation(File(version))
+            else -> runner.withGradleVersion(version)
+        }
     }
 
     fun run(

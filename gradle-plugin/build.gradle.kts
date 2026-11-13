@@ -119,6 +119,11 @@ gradlePlugin {
     }
 }
 
+// Published as com.vitorpamplona.magpie:magpie-gradle-plugin (the plugin markers point here).
+publishing.publications.withType<MavenPublication>().configureEach {
+    if (name == "pluginMaven") artifactId = "magpie-gradle-plugin"
+}
+
 // Functional tests: real Gradle builds (TestKit) against the in-memory relay and Blossom server.
 val functionalTest: SourceSet = sourceSets.create("functionalTest")
 configurations[functionalTest.implementationConfigurationName].extendsFrom(configurations.testImplementation.get())

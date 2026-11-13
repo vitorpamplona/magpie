@@ -68,6 +68,9 @@ public class ResolverStack(
     }
 
     public companion object {
+        /** "false" to skip the offline mirror (the gateway has no use for it). */
+        public const val MIRROR: String = "mirror"
+
         /** Keys in [EngineConfig]; the extra `nip05BaseUrl` points NIP-05 lookups at a fixed host. */
         public fun create(
             config: Map<String, String>,
@@ -105,7 +108,8 @@ public class ResolverStack(
             val store = BlobStore(File(cacheDir, "blobs"))
             val resolver = Resolver(settings, trust, RelayQuery(nostr, relays, cacheDir, log), BlobFetcher(http, store, log), log)
             val mirror = RepositoryMirror(File(cacheDir, "mirror"))
-            val router = Router(resolver, ChecksumFiles(File(cacheDir, "checksums")), log, mirror)
+            val useMirror = config[MIRROR]?.toBoolean() ?: true
+            val router = Router(resolver, ChecksumFiles(File(cacheDir, "checksums")), log, mirror.takeIf { useMirror })
             return ResolverStack(resolver, router, mirror, offline, nostr, http)
         }
     }
