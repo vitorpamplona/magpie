@@ -60,7 +60,7 @@ abstract class MagpieExtension
         /** How long a relay may stay silent before a query moves on, in milliseconds. */
         abstract val relayTimeoutMillis: Property<Long>
 
-        /** Testing hook: resolve NIP-05 names against this base URL instead of their domain. */
+        /** Testing hook: NIP-05 lookups go to this base URL (`{domain}` stands for the domain) instead of `https://<domain>`. */
         abstract val nip05BaseUrl: Property<String>
 
         internal val groups = mutableListOf<MagpieGroup>()
@@ -73,6 +73,15 @@ abstract class MagpieExtension
             fallbackServers.addAll(urls.toList())
         }
 
+        /**
+         * Trusts [group] and its subgroups to the key its domain vouches for:
+         * `releases@<domain>` from the group's full host down to its registrable domain
+         * (`com.example.lib` tries `releases@lib.example.com`, then `releases@example.com`).
+         */
+        fun group(group: String) {
+            group(group) {}
+        }
+
         /** Trusts [group] and its subgroups to one publisher, configured by [action]. */
         fun group(
             group: String,
@@ -80,29 +89,49 @@ abstract class MagpieExtension
         ) {
             val spec = MagpieGroup(group)
             action.execute(spec)
+            spec.validate()
             groups.removeAll { it.group == group }
             groups += spec
         }
     }
 
-/** How one group's publisher is trusted. */
+/** How one group's publisher is trusted. By default, the group's domain vouches for it. */
 class MagpieGroup(
     val group: String,
 ) {
-    internal var pin: String? = null
+    internal var pin: String = DOMAIN
 
-    /** Trust exactly this key (`npub1…` or hex). */
+    /** Trust exactly this key (`npub1…` or hex), with no domain involved. */
     fun publisher(npub: String) {
         pin = npub.trim()
     }
 
     /**
-     * Trust whatever key [identifier] (`name@domain`) points to the first time it is resolved,
-     * and pin it in `gradle/magpie.lock`; any later change fails the build. Without an argument,
-     * the group's reversed domain: `com.example.lib` -> `_@lib.example.com`.
+     * Trust the key a NIP-05 identity on one of the group's domains names, instead of
+     * `releases@`: `nip05("maven@example.com")` for `com.example`. Without an argument, the
+     * default (`releases@` down the domain chain).
      */
     @JvmOverloads
     fun nip05(identifier: String? = null) {
-        pin = "nip05:" + (identifier ?: ("_@" + group.split('.').reversed().joinToString(".")))
+        pin = if (identifier == null) DOMAIN else "nip05:" + identifier.trim().lowercase()
+    }
+
+    /** Catches the obvious misconfiguration early; the engine checks the public suffix list too. */
+    internal fun validate() {
+        if (!pin.startsWith("nip05:")) return
+        val domain = pin.substringAfter('@', "")
+        val host =
+            group
+                .lowercase()
+                .split('.')
+                .reversed()
+                .joinToString(".")
+        require(domain.isNotEmpty() && (host == domain || host.endsWith(".$domain"))) {
+            "Magpie: ${pin.removePrefix("nip05:")} can't vouch for $group; use an identity on $host or one of its parent domains"
+        }
+    }
+
+    internal companion object {
+        const val DOMAIN = "domain"
     }
 }

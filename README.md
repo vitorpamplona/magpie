@@ -30,8 +30,8 @@ plugins {
 
 magpie {
     relays("wss://relay.damus.io", "wss://nos.lol")
-    group("com.example") { publisher("npub1…") }   // this group and its subgroups, from this key only
-    group("org.other") { nip05("dev@other.org") }   // trust on first use, pinned in gradle/magpie.lock
+    group("com.example")                           // the key releases@example.com names (see below)
+    group("org.other") { publisher("npub1…") }     // or a key you pin yourself
 }
 ```
 
@@ -39,10 +39,21 @@ Then depend on it as usual: `implementation("com.example:lib:1.0.0")`.
 
 The plugin starts a Maven repository on `127.0.0.1:<random port>` inside the Gradle daemon the
 first time Gradle needs one of those groups, and registers it with `exclusiveContent`, so those
-groups never come from anywhere else. Commit `gradle/magpie.lock`: it records the publisher key
-each NIP-05 name resolved to and the release event of every version you resolved. A key that
-changes, or a locked release that disappears, fails the build. In CI, `-Pmagpie.frozenLock=true`
-also fails on anything the lock doesn't have yet.
+groups never come from anywhere else.
+
+**Whose releases count.** A groupId is a reversed domain, so the domain vouches for the key, the
+way Maven Central ties a namespace to a domain: `group("com.example.lib")` trusts the key that
+`releases@lib.example.com` names in its NIP-05 `nostr.json`, or, if that subdomain lists none,
+`releases@example.com` (the walk stops at the registrable domain). `releases` and not `_`,
+because `_` is usually the domain's general identity. `nip05("maven@example.com")` picks another
+name on those domains; `publisher("npub1…")` pins a key with no domain involved (the only option
+for a group that isn't a domain). Each group covers its subgroups.
+
+Commit `gradle/magpie.lock`: it records the key each group's domain vouched for and the manifest
+(the exact files) of every version you resolved. A domain that later names another key, or a
+locked version whose files can't be found, fails the build. Because the lock pins files rather
+than event ids, a publisher who rotates keys can re-sign the same manifests and locked builds keep
+working. In CI, `-Pmagpie.frozenLock=true` also fails on anything the lock doesn't have yet.
 
 Other settings: `fallbackServers(...)` (Blossom mirrors to try last), `lockFile`, `useLockFile`,
 `cacheDir` (default `~/.gradle/magpie`), `relayTimeoutMillis`.
@@ -77,12 +88,15 @@ configuration cache: they're read from the environment when the task runs.
 
 `publishToNostr` runs `maven-publish` into `build/magpie-repo`, then:
 
-1. reads your Blossom server list (kind 10063) and write relays (NIP-65); with no server list it
+1. checks that your group's domain vouches for the signing key (`releases@…` in its
+   `nostr.json`; the error says exactly what to add), so nobody's build will reject the release;
+   `magpie { verifyReleaseKey.set(false) }` skips this for groups that aren't domains;
+2. reads your Blossom server list (kind 10063) and write relays (NIP-65); with no server list it
    stops and tells you to run `./gradlew createNostrServerList --server=https://your.blossom.server`;
-2. refuses if this version is already released (publish a new version instead);
-3. checks every blob against every server (BUD-06 preflight) and stops **before signing** if a
+3. refuses if this version is already released (publish a new version instead);
+4. checks every blob against every server (BUD-06 preflight) and stops **before signing** if a
    blob fits on none;
-4. uploads what's missing under **one** BUD-02 authorization, uploads the manifest, signs the
+5. uploads what's missing under **one** BUD-02 authorization, uploads the manifest, signs the
    release and publishes it: **two signatures** per release.
 
 A bad release is fixed the Maven Central way: publish a new version. There is no yank.

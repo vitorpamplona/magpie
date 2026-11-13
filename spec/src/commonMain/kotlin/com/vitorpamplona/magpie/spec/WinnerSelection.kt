@@ -47,15 +47,15 @@ public object EventVerification {
 public sealed interface ReleaseSelection {
     public data class Found(
         val release: MagpieReleaseEvent,
-        /** Other releases for the same version that lost (later, or a lock pinned another). */
+        /** Other releases for the same version that lost (later, or a lock pinned another manifest). */
         val shadowed: List<MagpieReleaseEvent>,
     ) : ReleaseSelection
 
     public data object NotFound : ReleaseSelection
 
-    /** The lock file pins [lockedId] but no such release (by the pinned publisher) was found. */
+    /** The lock file pins [lockedManifest] but no release of it (by the trusted publisher) was found. */
     public data class LockedReleaseMissing(
-        val lockedId: String,
+        val lockedManifest: String,
         val available: List<MagpieReleaseEvent>,
     ) : ReleaseSelection
 }
@@ -88,16 +88,22 @@ public object WinnerSelection {
             .sortedWith(RELEASE_ORDER)
             .toList()
 
+    /**
+     * The canonical release. With [lockedManifest] (from the lock file) only releases of that
+     * manifest count, earliest first; none is [ReleaseSelection.LockedReleaseMissing].
+     */
     public fun release(
         events: Collection<Event>,
         module: ModuleId,
         version: String,
         publisher: HexKey,
-        lockedId: String? = null,
+        lockedManifest: String? = null,
     ): ReleaseSelection {
         val candidates = releasesFor(events, module, version, publisher)
-        if (lockedId != null) {
-            val locked = candidates.firstOrNull { it.id == lockedId } ?: return ReleaseSelection.LockedReleaseMissing(lockedId, candidates)
+        if (lockedManifest != null) {
+            val locked =
+                candidates.firstOrNull { it.manifest()?.sha256 == lockedManifest }
+                    ?: return ReleaseSelection.LockedReleaseMissing(lockedManifest, candidates)
             return ReleaseSelection.Found(locked, candidates - locked)
         }
         val winner = candidates.firstOrNull() ?: return ReleaseSelection.NotFound

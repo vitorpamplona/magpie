@@ -121,7 +121,7 @@ public class Resolver(
         releases[key]?.let { return it }
         return single(key) {
             releases[key]?.let { return@single it }
-            val locked = trust.lockedRelease(coordinate)
+            val locked = trust.lockedManifest(coordinate)
             val cacheFile = eventFile(publisher, coordinate)
 
             // Disk first: a release we already accepted never changes.
@@ -129,12 +129,12 @@ public class Resolver(
                 (WinnerSelection.release(query.readEvents(cacheFile), coordinate.module, coordinate.version, publisher, locked) as? ReleaseSelection.Found)?.release
             if (cached != null) {
                 releases[key] = cached
-                trust.recordRelease(coordinate, cached.id)
+                trust.recordRelease(coordinate, cached)
                 return@single cached
             }
             if (!query.online || missed(key)) {
                 if (locked != null && !query.online) {
-                    throw MagpieSecurityException("magpie.lock pins $coordinate to release $locked, which is not in the offline cache.")
+                    throw MagpieSecurityException("magpie.lock pins $coordinate to manifest $locked, which is not in the offline cache.")
                 }
                 return@single null
             }
@@ -150,15 +150,21 @@ public class Resolver(
                     }
                     query.writeEvents(cacheFile, listOf(selection.release))
                     releases[key] = selection.release
-                    trust.recordRelease(coordinate, selection.release.id)
+                    trust.recordRelease(coordinate, selection.release)
                     selection.release
                 }
 
                 is ReleaseSelection.LockedReleaseMissing -> {
                     throw MagpieSecurityException(
-                        "magpie.lock pins $coordinate to release ${selection.lockedId}, but the relays only have " +
-                            (selection.available.joinToString { it.id }.ifEmpty { "nothing" }) +
-                            ". Refusing to resolve a different release.",
+                        "magpie.lock pins $coordinate to manifest ${selection.lockedManifest}, but the relays only have releases of " +
+                            (
+                                selection.available
+                                    .mapNotNull { it.manifest()?.sha256 }
+                                    .distinct()
+                                    .joinToString()
+                                    .ifEmpty { "nothing" }
+                            ) +
+                            ". Refusing to resolve different files.",
                     )
                 }
 
@@ -225,10 +231,10 @@ public class Resolver(
         val releaseEntries =
             WinnerSelection.releasesByVersion(events, module, publisher).map { winner ->
                 val version = winner.version()!!
-                val locked = trust.lockedRelease(module.withVersion(version))
+                val locked = trust.lockedManifest(module.withVersion(version))
                 val chosen =
-                    if (locked != null && locked != winner.id) {
-                        WinnerSelection.releasesFor(events, module, version, publisher).firstOrNull { it.id == locked } ?: winner
+                    if (locked != null && locked != winner.manifest()?.sha256) {
+                        WinnerSelection.releasesFor(events, module, version, publisher).firstOrNull { it.manifest()?.sha256 == locked } ?: winner
                     } else {
                         winner
                     }

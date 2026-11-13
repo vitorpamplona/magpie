@@ -66,6 +66,14 @@ abstract class MagpieEngineTask : DefaultTask() {
     @get:Input
     abstract val nsecEnv: Property<String>
 
+    /** `domain`, a NIP-05 identity, or `off`: see [MagpiePublishExtension.verifyReleaseKey]. */
+    @get:Input
+    abstract val releaseKeyCheck: Property<String>
+
+    @get:Input
+    @get:Optional
+    abstract val nip05BaseUrl: Property<String>
+
     @get:Inject
     abstract val workers: WorkerExecutor
 
@@ -83,6 +91,8 @@ abstract class MagpieEngineTask : DefaultTask() {
             buildMap {
                 put(EngineConfig.INDEXER_RELAYS, relays.get().joinToString("\n"))
                 put(EngineConfig.PUBLISH_RELAYS, archivalRelays.get().joinToString("\n"))
+                put(EngineConfig.RELEASE_KEY_CHECK, releaseKeyCheck.get())
+                nip05BaseUrl.orNull?.let { put(EngineConfig.NIP05_BASE_URL, it) }
                 System.getenv(bunkerEnv.get())?.takeIf { it.isNotBlank() }?.let { put(EngineConfig.BUNKER_URI, it) }
                 System.getenv(nsecEnv.get())?.takeIf { it.isNotBlank() }?.let { put(EngineConfig.NSEC, it) }
                 putAll(extraConfig())

@@ -42,6 +42,32 @@ class Builds : AutoCloseable {
     val cache = File(root, "magpie-cache")
     val publisher = TestIdentity.ALICE
 
+    /**
+     * `nostr.json` by domain, served at `<nip05Base with {domain}>/.well-known/nostr.json`: the
+     * group `com.example`'s domain vouches for [publisher] as `releases@example.com`.
+     */
+    val wellKnown: MutableMap<String, MutableMap<String, String>> =
+        java.util.concurrent.ConcurrentHashMap(mapOf("example.com" to mutableMapOf("releases" to publisher.pubKey)))
+
+    private val nip05Server =
+        com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0).apply {
+            createContext("/") { ex ->
+                val domain = ex.requestURI.path.split('/')[1]
+                val names = wellKnown[domain]
+                if (names == null) {
+                    ex.sendResponseHeaders(404, -1)
+                } else {
+                    val body = names.entries.joinToString(",", "{\"names\":{", "}}") { "\"${it.key}\":\"${it.value}\"" }.toByteArray()
+                    ex.sendResponseHeaders(200, body.size.toLong())
+                    ex.responseBody.use { it.write(body) }
+                }
+                ex.close()
+            }
+            start()
+        }
+
+    val nip05Base: String = "http://127.0.0.1:${nip05Server.address.port}/{domain}"
+
     private val pluginRepo = System.getProperty("magpie.testRepo")
     private val pluginVersion = System.getProperty("magpie.version")
 
@@ -80,6 +106,7 @@ class Builds : AutoCloseable {
         version: String,
         greeting: String = "hello from nostr",
         artifact: String = "greeter",
+        extraMagpie: String = "",
     ): File {
         val d = dir(name)
         File(d, "settings.gradle.kts").writeText(
@@ -99,7 +126,11 @@ class Builds : AutoCloseable {
             version = "$version"
             java { withSourcesJar() }
             publishing { publications { create<MavenPublication>("maven") { from(components["java"]) } } }
-            magpie { relays("${relay.url}") }
+            magpie {
+                relays("${relay.url}")
+                nip05BaseUrl.set("$nip05Base")
+                $extraMagpie
+            }
             """.trimIndent(),
         )
         File(d, "src/main/java/com/example/Greeter.java").apply { parentFile.mkdirs() }.writeText(
@@ -115,7 +146,8 @@ class Builds : AutoCloseable {
     fun consumer(
         name: String,
         dependency: String,
-        trust: String = """publisher("${publisher.npub}")""",
+        // Empty: the group's domain vouches (releases@example.com).
+        trust: String = "",
         extraSettings: String = "",
     ): File {
         val d = dir(name)
@@ -129,6 +161,7 @@ class Builds : AutoCloseable {
                 group("com.example") { $trust }
                 cacheDir.set(file("${cache.absolutePath}"))
                 relayTimeoutMillis.set(3000L)
+                nip05BaseUrl.set("$nip05Base")
                 $extraSettings
             }
             rootProject.name = "consumer"
@@ -189,6 +222,7 @@ class Builds : AutoCloseable {
     override fun close() {
         relay.close()
         blossom.close()
+        nip05Server.stop(0)
         root.deleteRecursively()
     }
 }

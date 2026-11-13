@@ -70,7 +70,6 @@ class MagpieSettingsPlugin : Plugin<Settings> {
             logger.warn("Magpie: no groups configured; add magpie { group(\"com.example\") { publisher(\"npub1…\") } }")
             return
         }
-        groups.forEach { requireNotNull(it.pin) { "Magpie: group ${it.group} needs publisher(\"npub1…\") or nip05()" } }
         val offline = settings.startParameter.isOffline
         val cacheRoot = ext.cacheDir.get().asFile
         val lockFile = if (ext.useLockFile.get()) ext.lockFile.get().asFile else null
@@ -85,7 +84,7 @@ class MagpieSettingsPlugin : Plugin<Settings> {
                 put(EngineConfig.LOCK_FROZEN, ext.frozenLock.get().toString())
                 put(EngineConfig.OFFLINE, offline.toString())
                 put(EngineConfig.RELAY_TIMEOUT_MS, ext.relayTimeoutMillis.get().toString())
-                ext.nip05BaseUrl.orNull?.let { put("nip05BaseUrl", it) }
+                ext.nip05BaseUrl.orNull?.let { put(EngineConfig.NIP05_BASE_URL, it) }
             }
 
         val service =
@@ -148,8 +147,8 @@ class MagpieSettingsPlugin : Plugin<Settings> {
         val lockedKeys = lockFile?.takeIf { it.isFile }?.let { readLockedPublishers(it) }.orEmpty()
         groups
             .groupBy { group ->
-                val pin = group.pin!!
-                if (pin.startsWith("nip05:")) lockedKeys[group.group] else Bech32.publicKeyHex(pin)
+                val pin = group.pin
+                if (pin == MagpieGroup.DOMAIN || pin.startsWith("nip05:")) lockedKeys[group.group] else Bech32.publicKeyHex(pin)
             }.forEach { (pubKey, sameKey) ->
                 if (pubKey == null) {
                     logger.warn("Magpie (--offline): no key for ${sameKey.joinToString { it.group }} in magpie.lock yet; resolve once online first")

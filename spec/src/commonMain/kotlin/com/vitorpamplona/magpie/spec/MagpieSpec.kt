@@ -73,4 +73,10 @@ public object MagpieSpec {
 
     /** Media type of the manifest blob. */
     public const val MANIFEST_CONTENT_TYPE: String = "application/json"
+
+    /**
+     * The NIP-05 name that holds a domain's release key: `releases@<domain>`. Not `_`, which is
+     * usually the domain's general identity. See [ReleaseIdentity].
+     */
+    public const val RELEASES_NIP05_NAME: String = "releases"
 }

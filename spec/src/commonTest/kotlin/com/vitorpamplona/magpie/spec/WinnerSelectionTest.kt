@@ -89,12 +89,27 @@ class WinnerSelectionTest {
         val locked = release(alice, "1.0", 100, 'a')
         val result =
             assertIs<ReleaseSelection.Found>(
-                WinnerSelection.release(listOf(backdated, locked), module, "1.0", alice.pubKey, lockedId = locked.id),
+                WinnerSelection.release(listOf(backdated, locked), module, "1.0", alice.pubKey, lockedManifest = locked.manifest()!!.sha256),
             )
         assertEquals(locked.id, result.release.id)
         assertIs<ReleaseSelection.LockedReleaseMissing>(
-            WinnerSelection.release(listOf(backdated), module, "1.0", alice.pubKey, lockedId = locked.id),
+            WinnerSelection.release(listOf(backdated), module, "1.0", alice.pubKey, lockedManifest = locked.manifest()!!.sha256),
         )
+    }
+
+    @Test
+    fun aLockedManifestMatchesAnyReleaseOfIt() {
+        // A release re-signed later (say, after a key rotation re-published the same manifest)
+        // still satisfies the lock; a release of other files doesn't, even if earlier.
+        val original = release(alice, "1.0", 100, 'a')
+        val resigned = release(alice, "1.0", 300, 'a')
+        val other = release(alice, "1.0", 50, 'b')
+        val pinned = original.manifest()!!.sha256
+        val result =
+            assertIs<ReleaseSelection.Found>(
+                WinnerSelection.release(listOf(other, resigned), module, "1.0", alice.pubKey, lockedManifest = pinned),
+            )
+        assertEquals(resigned.id, result.release.id)
     }
 
     @Test
@@ -164,7 +179,7 @@ class WinnerSelectionTest {
     fun lockFileRoundTrip() {
         val lock =
             LockFile()
-                .withRelease(Coordinate("com.b", "x", "1.0"), "e".repeat(64))
+                .withRelease(Coordinate("com.b", "x", "1.0"), "e".repeat(64), "d".repeat(64))
                 .withPublisher("com.b", LockedPublisher(alice.pubKey, "nip05:alice@b.com"))
                 .withRelease(Coordinate("com.a", "x", "1.0"), "f".repeat(64))
         val text = lock.render()

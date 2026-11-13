@@ -65,10 +65,11 @@ class MagpieWorld : AutoCloseable {
     fun publisher(
         who: TestIdentity,
         signer: SecretKeySigner = SecretKeySigner(who.nsec),
+        keyCheck: com.vitorpamplona.magpie.core.publish.ReleaseKeyCheck? = null,
     ): Pair<Publisher, SecretKeySigner> {
         val http = Http.client()
         val nostr = QuartzNostrIO(http, log, idleTimeoutMs = 3_000)
-        return Publisher(nostr, BlossomClient(http, log), signer, http, log) to signer
+        return Publisher(nostr, BlossomClient(http, log), signer, http, log, keyCheck = keyCheck) to signer
     }
 
     fun publish(

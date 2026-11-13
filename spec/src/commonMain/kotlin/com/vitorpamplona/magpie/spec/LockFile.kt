@@ -22,25 +22,32 @@ package com.vitorpamplona.magpie.spec
 
 import com.vitorpamplona.quartz.nip01Core.core.HexKey
 
-/** A publisher key the lock pins for a group, and where it came from (`npub` or `nip05:<id>`). */
+/** A publisher key the lock pins for a group, and where it came from (`nip05:releases@domain`). */
 public data class LockedPublisher(
     val pubKey: HexKey,
     val source: String,
 )
 
+/** The manifest a resolved version pinned, and (for information) the event that carried it. */
+public data class LockedRelease(
+    val manifestSha256: String,
+    val eventId: String? = null,
+)
+
 /**
  * `gradle/magpie.lock`: what the first resolution learned, so later ones can't silently change.
  *
- * - `publisher <group> <hex pubkey> <source>`: the key a NIP-05 (trust on first use) resolved
- *   to, or the pinned npub. A different key later fails the build.
- * - `release <group:artifact:version> <event id>`: the release event resolution used. Later
- *   resolutions use exactly that event, even if an earlier-dated one shows up.
+ * - `publisher <group> <hex pubkey> <source>`: the key the group's domain vouched for
+ *   (`releases@<domain>` or a configured NIP-05). A different key later fails the build.
+ * - `release <group:artifact:version> <manifest sha256> [<event id>]`: the files resolution
+ *   used. Later resolutions accept only a release of that exact manifest: a backdated release
+ *   can't swap the files, and a rotated key that re-signs the same manifest still matches.
  *
  * The text form is sorted and stable, so the file diffs cleanly in version control.
  */
 public data class LockFile(
     val publishers: Map<String, LockedPublisher> = emptyMap(),
-    val releases: Map<String, String> = emptyMap(),
+    val releases: Map<String, LockedRelease> = emptyMap(),
 ) {
     public fun withPublisher(
         group: String,
@@ -49,10 +56,11 @@ public data class LockFile(
 
     public fun withRelease(
         coordinate: Coordinate,
-        eventId: String,
-    ): LockFile = copy(releases = releases + (coordinate.toString() to eventId))
+        manifestSha256: String,
+        eventId: String? = null,
+    ): LockFile = copy(releases = releases + (coordinate.toString() to LockedRelease(manifestSha256, eventId)))
 
-    public fun releaseFor(coordinate: Coordinate): String? = releases[coordinate.toString()]
+    public fun releaseFor(coordinate: Coordinate): LockedRelease? = releases[coordinate.toString()]
 
     public fun render(): String =
         buildString {
@@ -61,27 +69,30 @@ public data class LockFile(
                 val p = publishers.getValue(group)
                 append("publisher $group ${p.pubKey} ${p.source}\n")
             }
-            releases.keys.sorted().forEach { coordinate -> append("release $coordinate ${releases.getValue(coordinate)}\n") }
+            releases.keys.sorted().forEach { coordinate ->
+                val r = releases.getValue(coordinate)
+                append("release $coordinate ${r.manifestSha256}")
+                r.eventId?.let { append(" ").append(it) }
+                append("\n")
+            }
         }
 
     public companion object {
         public const val HEADER: String =
-            "# Magpie lock file. Commit it: it pins publisher keys learned on first use and the\n" +
-                "# release event each resolved version came from. A change to either fails the build.\n" +
+            "# Magpie lock file. Commit it: it pins the key each group's domain vouched for and the\n" +
+                "# manifest each resolved version came from. A change to either fails the build.\n" +
                 "version 1\n"
 
         public fun parse(text: String): LockFile {
             val publishers = mutableMapOf<String, LockedPublisher>()
-            val releases = mutableMapOf<String, String>()
+            val releases = mutableMapOf<String, LockedRelease>()
             text.lineSequence().forEachIndexed { index, raw ->
                 val line = raw.trim()
                 if (line.isEmpty() || line.startsWith("#")) return@forEachIndexed
                 val parts = line.split(Regex("\\s+"))
                 when (parts[0]) {
                     "version" -> {
-                        require(
-                            parts.getOrNull(1) == "1",
-                        ) { "magpie.lock line ${index + 1}: unsupported lock version ${parts.getOrNull(1)}" }
+                        require(parts.getOrNull(1) == "1") { "magpie.lock line ${index + 1}: unsupported lock version ${parts.getOrNull(1)}" }
                     }
 
                     "publisher" -> {
@@ -90,10 +101,13 @@ public data class LockFile(
                     }
 
                     "release" -> {
-                        require(parts.size == 3 && Coordinate.parseOrNull(parts[1]) != null && isSha256Hex(parts[2])) {
-                            "magpie.lock line ${index + 1}: malformed release line"
-                        }
-                        releases[parts[1]] = parts[2]
+                        require(
+                            parts.size in 3..4 &&
+                                Coordinate.parseOrNull(parts[1]) != null &&
+                                isSha256Hex(parts[2]) &&
+                                (parts.size == 3 || isSha256Hex(parts[3])),
+                        ) { "magpie.lock line ${index + 1}: malformed release line" }
+                        releases[parts[1]] = LockedRelease(parts[2], parts.getOrNull(3))
                     }
 
                     else -> {

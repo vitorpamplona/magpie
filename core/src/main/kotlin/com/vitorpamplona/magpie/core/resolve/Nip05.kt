@@ -20,45 +20,127 @@
  */
 package com.vitorpamplona.magpie.core.resolve
 
+import com.vitorpamplona.magpie.spec.ReleaseIdentity
 import com.vitorpamplona.quartz.nip01Core.core.HexKey
-import com.vitorpamplona.quartz.nip05DnsIdentifiers.Nip05Client
 import com.vitorpamplona.quartz.nip05DnsIdentifiers.Nip05Id
 import com.vitorpamplona.quartz.nip05DnsIdentifiers.Nip05Parser
-import com.vitorpamplona.quartz.nip05DnsIdentifiers.OkHttpNip05Fetcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.io.IOException
+import java.net.UnknownHostException
 
-/** NIP-05 through Quartz's client: `https://<domain>/.well-known/nostr.json?name=<name>`. */
-public class QuartzNip05Resolver(
-    http: OkHttpClient,
-) : Nip05Resolver {
-    private val client = Nip05Client(OkHttpNip05Fetcher({ http }))
+/** What a NIP-05 lookup said. Only [Absent] lets a caller move on to the next candidate. */
+public sealed interface Nip05Answer {
+    public data class Key(
+        val pubKey: HexKey,
+    ) : Nip05Answer
 
-    override suspend fun resolve(identifier: String): HexKey? {
-        val id = Nip05Id.parse(identifier) ?: throw IllegalArgumentException("Not a NIP-05 identifier: $identifier")
-        return client.get(id)?.pubkey?.lowercase()
-    }
+    /** Definitely no key: the domain doesn't exist, has no `nostr.json` (404), or doesn't list the name. */
+    public data object Absent : Nip05Answer
+
+    /** Couldn't tell (timeout, TLS, server error, redirect, garbage): must not count as absent. */
+    public data class Unreachable(
+        val reason: String,
+    ) : Nip05Answer
+}
+
+/** Looks NIP-05 identifiers up. */
+public fun interface Nip05Resolver {
+    public suspend fun lookup(identifier: String): Nip05Answer
 }
 
 /**
- * NIP-05 against a fixed base URL instead of the name's domain, for tests and for networks
- * that front `.well-known` elsewhere: `<baseUrl>/.well-known/nostr.json?name=<name>`.
+ * NIP-05 over HTTPS: `https://<domain>/.well-known/nostr.json?name=<name>`, without following
+ * redirects (NIP-05 forbids it). [baseUrlTemplate] replaces `https://<domain>` for tests, with
+ * `{domain}` standing for the domain.
  */
-public class FixedHostNip05Resolver(
-    private val http: OkHttpClient,
-    private val baseUrl: String,
+public class HttpNip05Resolver(
+    http: OkHttpClient,
+    private val baseUrlTemplate: String? = null,
 ) : Nip05Resolver {
-    override suspend fun resolve(identifier: String): HexKey? {
-        val name = identifier.substringBefore('@')
-        val json =
-            withContext(Dispatchers.IO) {
-                http.newCall(Request.Builder().url("${baseUrl.trimEnd('/')}/.well-known/nostr.json?name=$name").build()).execute().use {
-                    if (!it.isSuccessful) throw IllegalStateException("NIP-05 lookup failed: HTTP ${it.code}")
-                    it.body.string()
+    private val client =
+        http
+            .newBuilder()
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .build()
+
+    override suspend fun lookup(identifier: String): Nip05Answer {
+        val id = Nip05Id.parse(identifier) ?: return Nip05Answer.Unreachable("not a NIP-05 identifier: $identifier")
+        val base = baseUrlTemplate?.replace("{domain}", id.domain)?.trimEnd('/') ?: "https://${id.domain}"
+        val url = "$base/.well-known/nostr.json?name=${id.name}"
+        return withContext(Dispatchers.IO) {
+            try {
+                client.newCall(Request.Builder().url(url).build()).execute().use { response ->
+                    when {
+                        response.code == 404 -> {
+                            Nip05Answer.Absent
+                        }
+
+                        !response.isSuccessful -> {
+                            Nip05Answer.Unreachable("HTTP ${response.code} from $url")
+                        }
+
+                        else -> {
+                            val names =
+                                try {
+                                    Nip05Parser().parse(response.body.string()).names
+                                } catch (e: Exception) {
+                                    return@use Nip05Answer.Unreachable("unreadable nostr.json at $url")
+                                }
+                            names[id.name]
+                                ?.lowercase()
+                                ?.takeIf { it.length == 64 && it.all { c -> c in '0'..'9' || c in 'a'..'f' } }
+                                ?.let { Nip05Answer.Key(it) }
+                                ?: Nip05Answer.Absent
+                        }
+                    }
                 }
+            } catch (e: UnknownHostException) {
+                Nip05Answer.Absent
+            } catch (e: IOException) {
+                Nip05Answer.Unreachable("${e.javaClass.simpleName}: ${e.message} ($url)")
             }
-        return Nip05Parser().parse(json).names[name]?.lowercase()
+        }
     }
+}
+
+/** The public suffix list OkHttp ships, for [ReleaseIdentity]. */
+public object PublicSuffix {
+    /** The registrable domain of [host] (`quartz.vitorpamplona.com` -> `vitorpamplona.com`), or null for a public suffix. */
+    public fun registrableDomain(host: String): String? = "https://$host/".toHttpUrlOrNull()?.topPrivateDomain()
+}
+
+/** How a domain chain answered for a group. */
+public sealed interface VouchedKey {
+    public data class Found(
+        val identifier: String,
+        val pubKey: HexKey,
+    ) : VouchedKey
+
+    /** Every candidate definitely has no key. */
+    public data class NoneListed(
+        val tried: List<String>,
+    ) : VouchedKey
+
+    /** A candidate couldn't be read, so the chain can't be decided. */
+    public data class Undecided(
+        val identifier: String,
+        val reason: String,
+    ) : VouchedKey
+}
+
+/** Tries [identifiers] in order; the first key wins, an unreachable one stops the walk. */
+public suspend fun Nip05Resolver.vouch(identifiers: List<String>): VouchedKey {
+    for (identifier in identifiers) {
+        when (val answer = lookup(identifier)) {
+            is Nip05Answer.Key -> return VouchedKey.Found(identifier, answer.pubKey)
+            Nip05Answer.Absent -> continue
+            is Nip05Answer.Unreachable -> return VouchedKey.Undecided(identifier, answer.reason)
+        }
+    }
+    return VouchedKey.NoneListed(identifiers)
 }

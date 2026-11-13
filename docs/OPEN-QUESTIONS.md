@@ -23,8 +23,15 @@ are hard to reverse once releases exist.
    `com.vitorpamplona.quartz`) needs this. Exact-group-only would be stricter but would make that
    example useless.
 
-4. **`nip05()` without an argument.** Uses `_@<reversed group>`: `com.example` → `_@example.com`.
-   An explicit `nip05("name@domain")` is also accepted.
+4. **Default trust: the group's domain vouches.** `group("com.example.lib")` with no block trusts
+   the key at `releases@lib.example.com`, else `releases@example.com` (down to the registrable
+   domain, by OkHttp's public suffix list). `releases`, not `_`, which is usually the domain's
+   general identity. Only a definite "none" falls through to a parent domain; an unreachable one
+   decides nothing (the lock carries the build, or it fails). `nip05("name@domain")` must name a
+   domain on that chain; `publisher(npub)` pins a key with no domain. `publishToNostr` refuses to
+   sign with a key the domain doesn't name (`verifyReleaseKey.set(false)` to skip). Open: whether
+   the walk should stop at the most specific domain that *exists* rather than one that lists
+   `releases` (stricter for organisations that delegate subdomains to strangers).
 
 5. **No yanks.** A yank kind was built and then dropped: it couldn't keep a version out of the
    `<versions>` list Gradle's `1.+` reads, a leaked key could abuse it, and the fix for a bad
@@ -34,7 +41,7 @@ are hard to reverse once releases exist.
 
 6. **A later release of the same version.** The publisher refuses to sign one. If one appears
    anyway (another tool, a compromised key backdating `created_at`), clients keep the earliest,
-   and the lock file pins the one first resolved, so a backdated release can't take over a
+   and the lock file pins the manifest first resolved, so a backdated release can't take over a
    locked build. Without a lock, a backdated release *does* win: that is what earliest-wins means.
    The lock is on by default for that reason.
 

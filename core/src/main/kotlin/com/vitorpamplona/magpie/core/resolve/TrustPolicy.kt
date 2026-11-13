@@ -25,7 +25,9 @@ import com.vitorpamplona.magpie.core.util.MagpieLog
 import com.vitorpamplona.magpie.spec.Coordinate
 import com.vitorpamplona.magpie.spec.LockFile
 import com.vitorpamplona.magpie.spec.LockedPublisher
+import com.vitorpamplona.magpie.spec.MagpieReleaseEvent
 import com.vitorpamplona.magpie.spec.PublicKeys
+import com.vitorpamplona.magpie.spec.ReleaseIdentity
 import com.vitorpamplona.quartz.nip01Core.core.HexKey
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -33,23 +35,28 @@ import java.io.File
 
 /** How a group's publisher is trusted. */
 public sealed interface Pin {
-    /** A key written in the build's settings. */
+    /** A key written in the build's settings: no domain is asked. */
     public data class Key(
         val pubKey: HexKey,
     ) : Pin
 
-    /** A NIP-05 name resolved once (trust on first use) and recorded in the lock. */
+    /** A configured NIP-05 identity, which must sit on one of the group's domains. */
     public data class Nip05(
         val identifier: String,
     ) : Pin
 
+    /** The default: `releases@<domain>` down the group's domain chain ([ReleaseIdentity]). */
+    public data object Domain : Pin
+
     public companion object {
-        /** `npub1…`, hex, or `nip05:name@domain`. */
+        public const val DOMAIN: String = "domain"
+
+        /** `npub1…`, hex, `nip05:name@domain`, or `domain`. */
         public fun parse(value: String): Pin =
-            if (value.startsWith("nip05:")) {
-                Nip05(value.removePrefix("nip05:").trim().lowercase())
-            } else {
-                Key(PublicKeys.parse(value))
+            when {
+                value == DOMAIN -> Domain
+                value.startsWith("nip05:") -> Nip05(value.removePrefix("nip05:").trim().lowercase())
+                else -> Key(PublicKeys.parse(value))
             }
     }
 }
@@ -129,15 +136,13 @@ public class LockStore(
     }
 }
 
-/** Resolves NIP-05 names to keys. */
-public fun interface Nip05Resolver {
-    public suspend fun resolve(identifier: String): HexKey?
-}
-
 /**
- * Maps a group to the one key whose events count for it. The most specific rule wins. NIP-05
- * pins resolve once and are written to the lock; each daemon re-checks the name once and fails
- * loudly if it now points somewhere else.
+ * Maps a group to the one key whose events count for it; the most specific rule wins.
+ *
+ * Unless the build names a key, the group's domain vouches for it: `releases@<domain>` from the
+ * group's full host down to its registrable domain ([ReleaseIdentity]). The first answer is
+ * written to the lock. Every daemon walks the chain again once: a different key fails loudly; a
+ * chain it can't decide (a domain unreachable) falls back to the lock, or fails without one.
  */
 public class TrustPolicy(
     public val rules: List<GroupRule>,
@@ -145,88 +150,124 @@ public class TrustPolicy(
     private val nip05: Nip05Resolver,
     private val offline: Boolean,
     private val log: MagpieLog,
+    private val registrableDomain: (String) -> String? = PublicSuffix::registrableDomain,
 ) {
     private val verified = mutableMapOf<String, HexKey>()
     private val mutex = Mutex()
 
+    init {
+        rules.forEach { rule ->
+            when (val pin = rule.pin) {
+                is Pin.Nip05 -> {
+                    require(ReleaseIdentity.belongsTo(pin.identifier, rule.group, registrableDomain)) {
+                        "${pin.identifier} can't vouch for ${rule.group}: its domain must be one of " +
+                            ReleaseIdentity.domains(rule.group, registrableDomain).ifEmpty { listOf("(none: the group is not a domain)") }.joinToString()
+                    }
+                }
+
+                Pin.Domain -> {
+                    require(identifiersFor(rule).isNotEmpty()) {
+                        "${rule.group} doesn't map to a domain that could vouch for its publisher; configure publisher(\"npub1…\") for it"
+                    }
+                }
+
+                is Pin.Key -> {
+                    Unit
+                }
+            }
+        }
+    }
+
     public fun ruleFor(group: String): GroupRule? = rules.filter { it.matches(group) }.maxByOrNull { it.group.length }
+
+    /** The NIP-05 identities that may vouch for [rule]'s group, most specific first. */
+    public fun identifiersFor(rule: GroupRule): List<String> =
+        when (val pin = rule.pin) {
+            is Pin.Nip05 -> listOf(pin.identifier)
+            Pin.Domain -> ReleaseIdentity.candidates(rule.group, registrableDomain)
+            is Pin.Key -> emptyList()
+        }
 
     public suspend fun publisherFor(group: String): TrustedPublisher? {
         val rule = ruleFor(group) ?: return null
         return when (val pin = rule.pin) {
             is Pin.Key -> TrustedPublisher(pin.pubKey, rule)
-            is Pin.Nip05 -> TrustedPublisher(nip05Key(rule, pin), rule)
+            else -> TrustedPublisher(vouchedKey(rule), rule)
         }
     }
 
-    private suspend fun nip05Key(
-        rule: GroupRule,
-        pin: Pin.Nip05,
-    ): HexKey =
+    private suspend fun vouchedKey(rule: GroupRule): HexKey =
         mutex.withLock {
             verified[rule.group]?.let { return it }
-            val source = "nip05:${pin.identifier}"
+            val identifiers = identifiersFor(rule)
             val locked = lock.current().publishers[rule.group]
-            if (locked != null && locked.source != source) {
-                throw MagpieSecurityException(
-                    "magpie.lock pins ${rule.group} to ${locked.source} (${PublicKeys.npub(
-                        locked.pubKey,
-                    )}), but the build now says $source. " +
-                        "If that change is intended, delete the 'publisher ${rule.group}' line from magpie.lock.",
-                )
+            if (offline) {
+                val key = locked?.pubKey ?: throw MagpieSecurityException("--offline, and magpie.lock has no key for ${rule.group} yet: resolve once online.")
+                verified[rule.group] = key
+                return key
             }
-            val resolved =
-                if (offline) {
-                    null
-                } else {
-                    try {
-                        nip05.resolve(pin.identifier)
-                    } catch (e: Exception) {
-                        log.warn("Could not resolve NIP-05 ${pin.identifier}: ${e.message}")
-                        null
-                    }
-                }
             val key =
-                when {
-                    locked != null && resolved != null && resolved != locked.pubKey -> {
-                        throw MagpieSecurityException(
-                            "PUBLISHER KEY CHANGED for ${rule.group}: ${pin.identifier} now points to ${PublicKeys.npub(resolved)}, " +
-                                "but magpie.lock trusted ${PublicKeys.npub(locked.pubKey)} on first use. Refusing to resolve. " +
-                                "If the publisher really rotated keys, verify it out of band and delete the 'publisher ${rule.group}' line from magpie.lock.",
-                        )
+                when (val answer = nip05.vouch(identifiers)) {
+                    is VouchedKey.Found -> {
+                        when {
+                            locked == null -> {
+                                lock.update { it.withPublisher(rule.group, LockedPublisher(answer.pubKey, "nip05:${answer.identifier}")) }
+                                log.lifecycle("Magpie: trusting ${PublicKeys.npub(answer.pubKey)} for ${rule.group} (${answer.identifier}, recorded in magpie.lock)")
+                            }
+
+                            locked.pubKey != answer.pubKey -> {
+                                throw MagpieSecurityException(
+                                    "PUBLISHER KEY CHANGED for ${rule.group}: ${answer.identifier} now names ${PublicKeys.npub(answer.pubKey)}, " +
+                                        "but magpie.lock trusts ${PublicKeys.npub(locked.pubKey)} (${locked.source}). Refusing to resolve. " +
+                                        "If the publisher really rotated keys, verify it out of band and delete the 'publisher ${rule.group}' line from magpie.lock.",
+                                )
+                            }
+
+                            locked.source != "nip05:${answer.identifier}" -> {
+                                // Same key, now vouched for by another identity on the chain.
+                                lock.update { it.withPublisher(rule.group, LockedPublisher(answer.pubKey, "nip05:${answer.identifier}")) }
+                            }
+                        }
+                        answer.pubKey
                     }
 
-                    locked != null -> {
+                    is VouchedKey.Undecided -> {
+                        if (locked == null) {
+                            throw MagpieSecurityException(
+                                "Could not read ${answer.identifier} (${answer.reason}), so the release key for ${rule.group} can't be decided, " +
+                                    "and magpie.lock has none yet.",
+                            )
+                        }
+                        log.warn("Could not read ${answer.identifier} (${answer.reason}); using the key magpie.lock trusts for ${rule.group}")
                         locked.pubKey
                     }
 
-                    resolved != null -> {
-                        lock.update { it.withPublisher(rule.group, LockedPublisher(resolved, source)) }
-                        log.lifecycle(
-                            "Magpie: trusting ${PublicKeys.npub(resolved)} for ${rule.group} (${pin.identifier}, recorded in magpie.lock)",
-                        )
-                        resolved
-                    }
-
-                    else -> {
-                        throw MagpieSecurityException(
-                            "Could not resolve NIP-05 ${pin.identifier} for ${rule.group}, and magpie.lock has no key for it yet.",
-                        )
+                    is VouchedKey.NoneListed -> {
+                        if (locked == null) {
+                            throw MagpieSecurityException(
+                                "No release key for ${rule.group}: none of ${answer.tried.joinToString()} is listed. The publisher adds " +
+                                    "{\"names\":{\"${ReleaseIdentity.NAME}\":\"<hex pubkey>\"}} to /.well-known/nostr.json on one of those domains; " +
+                                    "or pin a key with publisher(\"npub1…\").",
+                            )
+                        }
+                        log.warn("${rule.group}'s domains no longer list a release key; using the one magpie.lock trusts")
+                        locked.pubKey
                     }
                 }
             verified[rule.group] = key
             key
         }
 
-    /** The release id the lock pins for [coordinate], if any. */
-    public fun lockedRelease(coordinate: Coordinate): String? = lock.current().releaseFor(coordinate)
+    /** The manifest the lock pins for [coordinate], if any. */
+    public fun lockedManifest(coordinate: Coordinate): String? = lock.current().releaseFor(coordinate)?.manifestSha256
 
     public suspend fun recordRelease(
         coordinate: Coordinate,
-        eventId: String,
+        release: MagpieReleaseEvent,
     ) {
         if (!lock.enabled) return
-        if (lock.current().releaseFor(coordinate) == eventId) return
-        lock.update { it.withRelease(coordinate, eventId) }
+        val manifest = release.manifest()?.sha256 ?: return
+        if (lock.current().releaseFor(coordinate)?.manifestSha256 == manifest) return
+        lock.update { it.withRelease(coordinate, manifest, release.id) }
     }
 }

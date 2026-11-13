@@ -47,8 +47,9 @@ BUD-02 authorization, BUD-06 preflight), which Quartz doesn't have as a client.
    `127.0.0.1:0`.
 3. Per request, `Router`:
    - parses the path (`MavenPath`); unknown groups are 404;
-   - finds the trusted key (`TrustPolicy`: an npub from the build, or a NIP-05 name resolved once
-     and pinned in `gradle/magpie.lock`; a later change fails loudly);
+   - finds the trusted key (`TrustPolicy`): by default `releases@<domain>` down the group's
+     domain chain (`ReleaseIdentity`, `HttpNip05Resolver`), pinned in `gradle/magpie.lock`, where
+     a later change fails loudly; or a configured NIP-05 on those domains, or an npub;
    - for a file: finds the release (`Resolver.release`: disk cache → relays, honoring the lock,
      earliest wins) or the newest snapshot; fetches the manifest (content-addressed, cached
      forever); looks up the file; fetches the blob from the release's server hints, then the
@@ -81,7 +82,9 @@ runs in a worker process:
 
 1. `RepoScanner` hashes every file of the group and version (skipping Gradle's sidecars and
    `maven-metadata.xml`, keeping `.asc`) into a `Manifest`.
-2. The publisher's kind 10063 and NIP-65 relays are read; no 10063 → a failure that names
+2. `ReleaseKeyCheck` makes sure the group's domain names the signing key (`releases@` down the
+   domain chain), so no consumer will reject the release. Then the publisher's kind 10063 and
+   NIP-65 relays are read; no 10063 → a failure that names
    `createNostrServerList`.
 3. `ModuleChecker` makes sure every file each `.module` references (and every `available-at`
    module) is in the manifest.
@@ -130,8 +133,8 @@ and a check there would become a configuration-cache input.
 ## Gateway
 
 `gateway/` serves the same `Router` over Ktor for clients that can't run the plugin (Maven,
-sbt, a CI cache). Its trust policy is an allowlist of group→npub in its config; it never does
-NIP-05 trust on first use and keeps no lock. Same caches, same bytes as the local resolver.
+sbt, a CI cache). Its trust policy is an allowlist of group→npub in its config: it doesn't ask
+domains, because it keeps no lock to hold their answers steady. Same caches, same bytes as the local resolver.
 
 ## Extension points
 

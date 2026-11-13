@@ -82,7 +82,7 @@ For a module `G:A` and version `V`, the canonical release among the events **by 
 the client trusts for `G`** that carry `["j","G:A"]` and `["v","V"]` is the one with the earliest
 `created_at`, ties broken by the lexicographically lowest `id`. A later event never replaces a
 version; publishers MUST NOT publish a second release of a version they already released, and
-clients MUST keep using the release they first resolved (see *Lock file*), because `created_at`
+clients MUST keep using the files they first resolved (see *Lock file*), because `created_at`
 is chosen by the signer.
 
 [NIP-09](09.md) deletions are ignored for releases: a build that resolved a version yesterday
@@ -144,15 +144,34 @@ current kind `10063`, then their own fallbacks, and MUST check every blob's sha2
 
 ## Trust
 
-There is no registry. A client pins each group (and its subgroups) to one publisher key, written
-in the build (`npub`) or learned on first use from a [NIP-05](05.md) name and recorded in a lock
-file. Events by any other key are ignored.
+There is no registry. Each group (and its subgroups) is trusted to exactly one key, and a groupId
+is a reversed domain, so by default the domain vouches for it through [NIP-05](05.md), the way
+Maven Central ties a namespace to a domain:
+
+1. Reverse the groupId into a host: `com.vitorpamplona.quartz` → `quartz.vitorpamplona.com`.
+2. Walk from that host down to its registrable domain (per the public suffix list), looking up
+   the name `releases` on each: `releases@quartz.vitorpamplona.com`, then
+   `releases@vitorpamplona.com`.
+3. The first key listed is the group's release key. Only a definite "none" (the domain doesn't
+   exist, `nostr.json` is 404, or doesn't list `releases`) moves on to the next domain; a domain
+   that can't be read stops the walk, so an outage never hands a group to a parent domain's key.
+
+`releases` rather than `_`, because `_` is usually the domain's general identity, and release
+keys are better kept apart (in a bunker that never posts). Clients MAY let users pin another
+identity on the same domains, or a key directly (the only option for a group that isn't a
+domain, such as one with `_` in a segment). Events by any other key are ignored.
+
+Publishers SHOULD check before signing that their key is the one their group's domain names.
 
 ## Lock file
 
-Clients SHOULD keep, per project, the publisher key learned for each NIP-05-pinned group and the
-release event id each resolved version came from, and SHOULD fail (not silently switch) when a
-NIP-05 name later points to another key or when a locked release can't be found.
+Clients SHOULD keep, per project, the key each group's domain vouched for and the manifest hash
+each resolved version came from, and SHOULD fail (not silently switch) when the domain later
+names another key or when no release of a locked manifest can be found.
+
+Pinning the manifest rather than the event id means that after a key rotation (the publisher
+changes `releases@` to a new key and re-signs the same manifests) locked builds keep resolving
+the same files, once their users accept the new key.
 
 ## Related
 

@@ -97,6 +97,7 @@ class KmpEndToEndTest {
             }
             magpie {
                 relays("${builds.relay.url}")
+                nip05BaseUrl.set("${builds.nip05Base}")
                 ${partialsDir?.let { "partialsDir.set(file(\"${it.absolutePath}\"))" } ?: ""}
             }
 

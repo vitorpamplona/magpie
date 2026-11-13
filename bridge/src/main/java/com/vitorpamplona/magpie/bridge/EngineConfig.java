@@ -29,7 +29,10 @@ public final class EngineConfig {
     // Resolution
     /** Relays to query, newline-separated. */
     public static final String RELAYS = "relays";
-    /** {@code <group>=<npub|hex>} or {@code <group>=nip05:<name@domain>}, newline-separated. */
+    /**
+     * {@code <group>=domain} (the group's domain vouches: {@code releases@<domain>}),
+     * {@code <group>=nip05:<name@domain>} or {@code <group>=<npub|hex>}, newline-separated.
+     */
     public static final String GROUPS = "groups";
     /** Blossom servers tried after the release's hints and the publisher's kind 10063. */
     public static final String FALLBACK_SERVERS = "fallbackServers";
@@ -43,6 +46,8 @@ public final class EngineConfig {
     public static final String NEGATIVE_TTL_MS = "negativeTtlMs";
     /** Idle timeout for relay queries, in milliseconds. */
     public static final String RELAY_TIMEOUT_MS = "relayTimeoutMs";
+    /** Testing hook: NIP-05 lookups go to this base URL ({@code {domain}} stands for the domain). */
+    public static final String NIP05_BASE_URL = "nip05BaseUrl";
     /** "true" to refuse to change the lock (CI): new entries fail the build instead. */
     public static final String LOCK_FROZEN = "lockFrozen";
 
@@ -73,6 +78,14 @@ public final class EngineConfig {
     public static final String PARTIAL = "partial";
     /** Blossom servers for {@link #TASK_CREATE_SERVER_LIST}. */
     public static final String SERVERS = "servers";
+    /**
+     * Which key the group's domain must vouch for before publishing: {@link #RELEASE_KEY_DOMAIN}
+     * (default: {@code releases@} down the group's domain chain), a NIP-05 identifier on that
+     * chain, or {@link #RELEASE_KEY_OFF}.
+     */
+    public static final String RELEASE_KEY_CHECK = "releaseKeyCheck";
+    public static final String RELEASE_KEY_DOMAIN = "domain";
+    public static final String RELEASE_KEY_OFF = "off";
     /** "true" to skip publishing events (dry run). */
     public static final String DRY_RUN = "dryRun";
 }

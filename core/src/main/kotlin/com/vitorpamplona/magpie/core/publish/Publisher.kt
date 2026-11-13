@@ -105,6 +105,8 @@ public class Publisher(
     private val log: MagpieLog,
     private val clock: Clock = Clock.SYSTEM,
     private val parallelism: Int = 8,
+    /** Checks the signer is the key the group's domain vouches for; null skips it. */
+    private val keyCheck: ReleaseKeyCheck? = null,
 ) {
     private fun now() = clock.nowMillis() / 1000
 
@@ -140,6 +142,7 @@ public class Publisher(
         val manifest = scanned.manifest
         log.lifecycle("Magpie: ${manifest.coordinate} has ${manifest.files.size} files in ${manifest.artifacts.size} modules")
 
+        keyCheck?.verify(settings.group, signer.pubKey())
         val context = context(settings.indexerRelays)
         val relays = (context.writeRelays + settings.publishRelays).ifEmpty { settings.indexerRelays }.distinct()
         if (!manifest.coordinate.isSnapshot) refuseOverwrite(manifest, context, (relays + settings.indexerRelays).distinct())
@@ -174,6 +177,7 @@ public class Publisher(
         }
         log.lifecycle("Magpie: merged ${partials.size} partial manifests into ${manifest.files.size} files")
 
+        keyCheck?.verify(settings.group, signer.pubKey())
         val context = context(settings.indexerRelays)
         val relays = (context.writeRelays + settings.publishRelays).ifEmpty { settings.indexerRelays }.distinct()
         if (!manifest.coordinate.isSnapshot) refuseOverwrite(manifest, context, (relays + settings.indexerRelays).distinct())

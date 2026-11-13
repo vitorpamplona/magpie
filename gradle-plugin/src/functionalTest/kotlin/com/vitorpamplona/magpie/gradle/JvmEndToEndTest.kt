@@ -50,7 +50,7 @@ class JvmEndToEndTest {
         assertTrue("GREETING: hello from nostr" in result.output)
 
         val lock = LockFile.parse(File(app, "gradle/magpie.lock").readText())
-        assertEquals(releases.single().id, lock.releases["com.example:greeter:1.0.0"])
+        assertEquals(releases.single().id, lock.releases["com.example:greeter:1.0.0"]?.eventId)
 
         // Configuration cache reuse: a new build, a new server on a new port, same result. (The
         // second run stores again: the first created the engine directory under the cache.)
@@ -120,7 +120,8 @@ class JvmEndToEndTest {
 
     @Test
     fun missingServerListOffersTheTask() {
-        val lib = builds.javaLibrary("lib", "1.0.0")
+        // A key the domain doesn't vouch for, with the check off: this is about the server list.
+        val lib = builds.javaLibrary("lib", "1.0.0", extraMagpie = "verifyReleaseKey.set(false)")
         val stranger =
             com.vitorpamplona.magpie.testkit
                 .TestIdentity()
@@ -128,5 +129,38 @@ class JvmEndToEndTest {
         assertTrue("createNostrServerList" in result.output, result.output)
         builds.run(lib, "createNostrServerList", "--server=${builds.blossom.url}", env = mapOf("MAGPIE_NSEC" to stranger.nsec))
         builds.run(lib, "publishToNostr", env = mapOf("MAGPIE_NSEC" to stranger.nsec))
+    }
+
+    @Test
+    fun theGroupsDomainVouchesForTheReleaseKey() {
+        builds.run(builds.javaLibrary("lib", "1.0.0"), "publishToNostr", env = builds.signerEnv)
+        val app = builds.consumer("app", "com.example:greeter:1.0.0")
+        assertTrue("GREETING: hello from nostr" in builds.run(app, "run").output)
+        val locked = LockFile.parse(File(app, "gradle/magpie.lock").readText()).publishers.getValue("com.example")
+        assertEquals(builds.publisher.pubKey, locked.pubKey)
+        assertEquals("nip05:releases@example.com", locked.source)
+
+        // The domain now names another key: the build refuses, loudly.
+        builds.wellKnown.getValue("example.com")["releases"] = com.vitorpamplona.magpie.testkit.TestIdentity.MALLORY.pubKey
+        val changed = builds.fail(app, "run", "--refresh-dependencies")
+        assertTrue("PUBLISHER KEY CHANGED" in changed.output, changed.output)
+    }
+
+    @Test
+    fun publishingRefusesAKeyTheDomainDoesNotVouchFor() {
+        val mallory = com.vitorpamplona.magpie.testkit.TestIdentity.MALLORY
+        builds.run(builds.javaLibrary("setup", "0.0.1", extraMagpie = "verifyReleaseKey.set(false)"), "createNostrServerList", "--server=${builds.blossom.url}", env = mapOf("MAGPIE_NSEC" to mallory.nsec))
+        val result = builds.fail(builds.javaLibrary("lib", "1.0.0"), "publishToNostr", env = mapOf("MAGPIE_NSEC" to mallory.nsec))
+        assertTrue("releases@example.com" in result.output && "Consumers would reject the release" in result.output, result.output)
+        assertEquals(0, builds.relay.query(Filter(kinds = listOf(MagpieSpec.KIND_RELEASE))).size)
+        assertEquals(0, builds.blossom.uploads.get(), "nothing uploaded")
+    }
+
+    @Test
+    fun aPinnedKeyNeedsNoDomain() {
+        builds.wellKnown.clear()
+        builds.run(builds.javaLibrary("lib", "1.0.0", extraMagpie = "verifyReleaseKey.set(false)"), "publishToNostr", env = builds.signerEnv)
+        val app = builds.consumer("app", "com.example:greeter:1.0.0", trust = """publisher("${builds.publisher.npub}")""")
+        assertTrue("GREETING: hello from nostr" in builds.run(app, "run").output)
     }
 }

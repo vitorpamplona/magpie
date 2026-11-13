@@ -99,8 +99,9 @@ class PublishResolveTest {
 
         // Every module coordinate that resolved is pinned in the lock.
         val lock = LockFile.parse(File(world.root, "magpie.lock").readText())
-        assertEquals(result.eventId, lock.releaseFor(Coordinate("com.example", "lib-jvm", "1.0.0")))
-        assertEquals(result.eventId, lock.releaseFor(Coordinate("com.example", "lib", "1.0.0")))
+        assertEquals(result.manifestSha256, lock.releaseFor(Coordinate("com.example", "lib-jvm", "1.0.0"))?.manifestSha256)
+        assertEquals(result.eventId, lock.releaseFor(Coordinate("com.example", "lib-jvm", "1.0.0"))?.eventId)
+        assertEquals(result.manifestSha256, lock.releaseFor(Coordinate("com.example", "lib", "1.0.0"))?.manifestSha256)
     }
 
     @Test
@@ -176,7 +177,7 @@ class PublishResolveTest {
         val published = world.publish(alice, repoV1.dir, "1.0.0")
         val lockFile = File(world.root, "magpie.lock")
         world.stack(alice, cache = world.dir("cache-a")).use { it.get("com/example/lib-jvm/1.0.0/lib-jvm-1.0.0.jar").bytes() }
-        assertEquals(published.eventId, LockFile.parse(lockFile.readText()).releaseFor(Coordinate("com.example", "lib-jvm", "1.0.0")))
+        assertEquals(published.manifestSha256, LockFile.parse(lockFile.readText()).releaseFor(Coordinate("com.example", "lib-jvm", "1.0.0"))?.manifestSha256)
 
         // The key signs an earlier-dated release (a compromised key could). Without the lock it
         // would win; with it, resolution keeps the locked one.

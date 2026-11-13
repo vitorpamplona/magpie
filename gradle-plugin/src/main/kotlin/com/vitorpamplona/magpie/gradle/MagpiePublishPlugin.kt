@@ -58,6 +58,18 @@ abstract class MagpiePublishExtension
         /** Where partial manifests are written (`--partial`) and read (closeNostrRelease). */
         abstract val partialsDir: DirectoryProperty
 
+        /**
+         * Refuse to publish unless the group's domain vouches for the signing key, as consumers
+         * require (default true): `releases@<domain>` down the group's domain chain.
+         */
+        abstract val verifyReleaseKey: Property<Boolean>
+
+        /** A NIP-05 identity on the group's domains to check instead of `releases@` (`maven@example.com`). */
+        abstract val releaseKeyNip05: Property<String>
+
+        /** Testing hook: NIP-05 lookups go to this base URL (`{domain}` stands for the domain). */
+        abstract val nip05BaseUrl: Property<String>
+
         val signer: MagpieSignerSpec = MagpieSignerSpec()
 
         fun relays(vararg urls: String) {
@@ -96,6 +108,7 @@ class MagpiePublishPlugin : Plugin<Project> {
         project.pluginManager.apply("maven-publish")
         val ext = project.extensions.create("magpie", MagpiePublishExtension::class.java)
         ext.partialsDir.convention(project.layout.buildDirectory.dir("magpie/partials"))
+        ext.verifyReleaseKey.convention(true)
         val repoDir = project.layout.buildDirectory.dir("magpie-repo")
         val publishing = project.extensions.getByType(PublishingExtension::class.java)
         publishing.repositories.maven {
@@ -127,6 +140,12 @@ class MagpiePublishPlugin : Plugin<Project> {
             task.archivalRelays.set(ext.archivalRelays)
             task.bunkerEnv.set(project.provider { ext.signer.bunkerEnv })
             task.nsecEnv.set(project.provider { ext.signer.nsecEnv })
+            task.releaseKeyCheck.set(
+                ext.verifyReleaseKey.flatMap { verify ->
+                    if (verify) ext.releaseKeyNip05.orElse(EngineConfig.RELEASE_KEY_DOMAIN) else project.provider { EngineConfig.RELEASE_KEY_OFF }
+                },
+            )
+            task.nip05BaseUrl.set(ext.nip05BaseUrl)
         }
 
         project.tasks.register("publishToNostr", PublishToNostrTask::class.java) {

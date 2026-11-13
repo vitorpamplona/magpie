@@ -26,10 +26,9 @@ import com.vitorpamplona.magpie.core.nostr.QuartzNostrIO
 import com.vitorpamplona.magpie.core.resolve.BlobFetcher
 import com.vitorpamplona.magpie.core.resolve.BlobStore
 import com.vitorpamplona.magpie.core.resolve.ChecksumFiles
-import com.vitorpamplona.magpie.core.resolve.FixedHostNip05Resolver
 import com.vitorpamplona.magpie.core.resolve.GroupRule
+import com.vitorpamplona.magpie.core.resolve.HttpNip05Resolver
 import com.vitorpamplona.magpie.core.resolve.LockStore
-import com.vitorpamplona.magpie.core.resolve.QuartzNip05Resolver
 import com.vitorpamplona.magpie.core.resolve.RelayQuery
 import com.vitorpamplona.magpie.core.resolve.RepositoryMirror
 import com.vitorpamplona.magpie.core.resolve.Resolver
@@ -71,7 +70,10 @@ public class ResolverStack(
         /** "false" to skip the offline mirror (the gateway has no use for it). */
         public const val MIRROR: String = "mirror"
 
-        /** Keys in [EngineConfig]; the extra `nip05BaseUrl` points NIP-05 lookups at a fixed host. */
+        /** Testing hook: NIP-05 lookups go to this base URL (`{domain}` stands for the domain) instead of `https://<domain>`. */
+        public const val NIP05_BASE_URL: String = EngineConfig.NIP05_BASE_URL
+
+        /** Keys in [EngineConfig], plus [MIRROR] and [NIP05_BASE_URL]. */
         public fun create(
             config: Map<String, String>,
             log: MagpieLog,
@@ -102,8 +104,7 @@ public class ResolverStack(
                     config.flag(EngineConfig.LOCK_FROZEN),
                     log,
                 )
-            val nip05 =
-                config["nip05BaseUrl"]?.takeIf { it.isNotBlank() }?.let { FixedHostNip05Resolver(http, it) } ?: QuartzNip05Resolver(http)
+            val nip05 = HttpNip05Resolver(http, config[NIP05_BASE_URL]?.takeIf { it.isNotBlank() })
             val trust = TrustPolicy(config.list(EngineConfig.GROUPS).map { GroupRule.parse(it) }, lock, nip05, offline, log)
             val store = BlobStore(File(cacheDir, "blobs"))
             val resolver = Resolver(settings, trust, RelayQuery(nostr, relays, cacheDir, log), BlobFetcher(http, store, log), log)
