@@ -45,8 +45,7 @@ class WinnerSelectionTest {
         mapOf("lib/$version/lib-$version.jar" to ManifestFile(seed.toString().repeat(64), 1)),
     )
 
-    private fun <T : Event> NostrSignerSync.signed(template: EventTemplate<T>): Event =
-        MagpieEvents.wrap(sign<Event>(template.createdAt, template.kind, template.tags, template.content))!!
+    private fun <T : Event> NostrSignerSync.signed(template: EventTemplate<T>): Event = MagpieEvents.wrap(sign<Event>(template.createdAt, template.kind, template.tags, template.content))!!
 
     private fun release(
         signer: NostrSignerSync,

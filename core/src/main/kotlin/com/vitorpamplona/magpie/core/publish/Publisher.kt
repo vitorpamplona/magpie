@@ -118,7 +118,13 @@ public class Publisher(
             )
         val serverList = events.filter { it.kind == MagpieSpec.KIND_BLOSSOM_SERVERS && it.pubKey == pubKey }.maxByOrNull { it.createdAt }
         val relayList = events.filter { it.kind == MagpieSpec.KIND_RELAY_LIST && it.pubKey == pubKey }.maxByOrNull { it.createdAt }
-        val servers = serverList?.tags?.filter { it.size >= 2 && it[0] == "server" }?.map { it[1].trimEnd('/') }?.distinct().orEmpty()
+        val servers =
+            serverList
+                ?.tags
+                ?.filter { it.size >= 2 && it[0] == "server" }
+                ?.map { it[1].trimEnd('/') }
+                ?.distinct()
+                .orEmpty()
         if (servers.isEmpty()) throw MissingServerListException(PublicKeys.npub(pubKey))
         val writeRelays =
             relayList
