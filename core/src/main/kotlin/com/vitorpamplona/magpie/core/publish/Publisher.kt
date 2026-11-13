@@ -30,7 +30,6 @@ import com.vitorpamplona.magpie.spec.MagpieEvents
 import com.vitorpamplona.magpie.spec.MagpieReleaseEvent
 import com.vitorpamplona.magpie.spec.MagpieSnapshotEvent
 import com.vitorpamplona.magpie.spec.MagpieSpec
-import com.vitorpamplona.magpie.spec.MagpieYankEvent
 import com.vitorpamplona.magpie.spec.Manifest
 import com.vitorpamplona.magpie.spec.PublicKeys
 import com.vitorpamplona.magpie.spec.WinnerSelection
@@ -272,7 +271,7 @@ public class Publisher(
         if (clash != null) {
             throw VersionAlreadyReleasedException(
                 "${clash.first}:${manifest.coordinate.version} is already released (event ${clash.second.id}). " +
-                    "Releases are immutable: bump the version. To deprecate it, use yankNostrRelease.",
+                    "Releases are immutable: publish a new version.",
             )
         }
     }
@@ -378,26 +377,6 @@ public class Publisher(
         val results = nostr.publish(relays, event)
         if (results.values.none { it }) throw IllegalStateException("No relay accepted the server list (${relays.joinToString()})")
         log.lifecycle("Magpie: published Blossom server list ${servers.joinToString()} to ${results.filterValues { it }.size} relays")
-        return event
-    }
-
-    /** Signs and publishes a yank of release [releaseId]. The release keeps resolving. */
-    public suspend fun yank(
-        releaseId: String,
-        reason: String,
-        relays: List<String>,
-    ): Event {
-        val pubKey = signer.pubKey()
-        val release =
-            nostr
-                .query(relays, listOf(Filter(ids = listOf(releaseId))))
-                .mapNotNull { MagpieEvents.wrap(it) as? MagpieReleaseEvent }
-                .firstOrNull() ?: throw IllegalArgumentException("Release $releaseId not found on ${relays.joinToString()}")
-        require(release.pubKey == pubKey) { "Release $releaseId was signed by ${PublicKeys.npub(release.pubKey)}, not by this signer" }
-        val event = signer.sign(MagpieYankEvent.build(release, reason, now()))
-        val results = nostr.publish(relays, event)
-        if (results.values.none { it }) throw IllegalStateException("No relay accepted the yank")
-        log.lifecycle("Magpie: yanked ${release.coordinate()} ($releaseId): $reason")
         return event
     }
 

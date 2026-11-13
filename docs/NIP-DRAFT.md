@@ -22,7 +22,6 @@ they live in one file (`spec/…/MagpieSpec.kt`).
 - A **manifest** blob maps every Maven file name of the release to its sha256 and size.
 - A **release** event (regular kind `3071`) pins the manifest. Releases are immutable.
 - A **snapshot** event (addressable kind `33071`) pins the manifest of a `-SNAPSHOT` version.
-- A **yank** event (regular kind `3072`) deprecates a release without removing it.
 
 ## Manifest
 
@@ -87,7 +86,7 @@ clients MUST keep using the release they first resolved (see *Lock file*), becau
 is chosen by the signer.
 
 [NIP-09](09.md) deletions are ignored for releases: a build that resolved a version yesterday
-must resolve the same bytes tomorrow. To deprecate a release, yank it.
+must resolve the same bytes tomorrow. A bad release is superseded by publishing a new version.
 
 ## Snapshot (kind `33071`)
 
@@ -97,33 +96,12 @@ older ones; clients pick the newest `created_at` (ties: lowest `id`). File names
 are Maven's timestamped ones, from which clients generate the version-level
 `maven-metadata.xml`.
 
-## Yank (kind `3072`)
-
-```json
-{
-  "kind": 3072,
-  "content": "CVE-2026-0001: please upgrade to 1.0.1",
-  "tags": [
-    ["e", "<release event id>"],
-    ["k", "3071"],
-    ["j", "com.example:lib"],
-    ["j", "com.example:lib-jvm"],
-    ["v", "1.0.0"],
-    ["alt", "Yanked com.example:lib:1.0.0: …"]
-  ]
-}
-```
-
-A yank counts only when signed by the release's author. Yanked releases keep resolving; clients
-SHOULD warn when they serve one and SHOULD NOT pick it as `latest`/`release` in generated
-metadata. The `j`/`v` tags let a client fetch yanks with the same query it uses for releases.
-
 ## Querying
 
 | Need | Filter |
 |---|---|
 | A version | `{"kinds":[3071], "authors":[<pinned>], "#j":["G:A"], "#v":["V"]}` |
-| All versions (for `maven-metadata.xml`) | `{"kinds":[3071,33071,3072], "authors":[<pinned>], "#j":["G:A"]}` |
+| All versions (for `maven-metadata.xml`) | `{"kinds":[3071,33071], "authors":[<pinned>], "#j":["G:A"]}` |
 | A snapshot | `{"kinds":[33071], "authors":[<pinned>], "#j":["G:A"], "#v":["V-SNAPSHOT"]}` |
 | Who signed a file | `{"kinds":[3071,33071], "#x":["<sha256>"]}` |
 | Where blobs are | `{"kinds":[10063], "authors":[<pinned>]}` |
@@ -181,3 +159,11 @@ NIP-05 name later points to another key or when a locked release can't be found.
 Kind `30063` (release artifact sets, used by app stores) groups files for a release but is
 addressable, so it can be replaced; Maven coordinates need immutable releases with an
 earliest-wins rule, hence a regular kind.
+
+## Why no yank
+
+An earlier draft had a yank kind to deprecate a release without removing it. It was dropped: a
+yanked version still appears in `maven-metadata.xml`'s version list, which is what Gradle's
+dynamic versions (`1.+`) read, so it only produced warnings; a bad release is fixed by publishing
+a new version, as on Maven Central; and a leaked key could yank genuine releases. A deprecation
+kind can be added later without breaking clients, which ignore kinds they don't know.

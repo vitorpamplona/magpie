@@ -26,7 +26,6 @@ import com.vitorpamplona.magpie.spec.Coordinate
 import com.vitorpamplona.magpie.spec.MagpiePublicationEvent
 import com.vitorpamplona.magpie.spec.MagpieReleaseEvent
 import com.vitorpamplona.magpie.spec.MagpieSnapshotEvent
-import com.vitorpamplona.magpie.spec.MagpieYankEvent
 import com.vitorpamplona.magpie.spec.Manifest
 import com.vitorpamplona.magpie.spec.ModuleId
 import com.vitorpamplona.magpie.spec.PublicKeys
@@ -79,7 +78,6 @@ public class Resolver(
     private val misses = ConcurrentHashMap<String, Long>()
     private val manifests = ConcurrentHashMap<String, Manifest>()
     private val locks = ConcurrentHashMap<String, Mutex>()
-    private val warnedYanks = ConcurrentHashMap.newKeySet<String>()
 
     private val eventsDir = File(settings.cacheDir, "events")
 
@@ -195,7 +193,7 @@ public class Resolver(
         }
     }
 
-    /** Every release, snapshot and yank of [module], for metadata. */
+    /** Every release and snapshot of [module], for metadata. */
     public suspend fun moduleEvents(
         module: ModuleId,
         publisher: HexKey,
@@ -234,21 +232,11 @@ public class Resolver(
                     } else {
                         winner
                     }
-                VersionEntry(version, chosen.createdAt, yanked = WinnerSelection.yankOf(chosen, events) != null)
+                VersionEntry(version, chosen.createdAt)
             }
         val snapshotEntries =
             WinnerSelection.snapshotsByVersion(events, module, publisher).map { VersionEntry(it.version()!!, it.createdAt) }
         return releaseEntries + snapshotEntries
-    }
-
-    /** The publisher's yank of [release], if they signed one. Logs a warning once. */
-    public suspend fun yankOf(release: MagpieReleaseEvent): MagpieYankEvent? {
-        val module = release.modules().firstOrNull() ?: return null
-        val yank = WinnerSelection.yankOf(release, moduleEvents(module, release.pubKey))
-        if (yank != null && warnedYanks.add(release.id)) {
-            log.warn("${release.coordinate()} is yanked by its publisher: ${yank.reason().ifBlank { "no reason given" }}")
-        }
-        return yank
     }
 
     /** The manifest a publication pins, fetched and hash-checked once, then cached forever. */

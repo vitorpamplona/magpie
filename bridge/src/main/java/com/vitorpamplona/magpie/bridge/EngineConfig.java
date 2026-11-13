@@ -50,7 +50,6 @@ public final class EngineConfig {
     public static final String TASK_PUBLISH = "publish";
     public static final String TASK_CLOSE = "close";
     public static final String TASK_CREATE_SERVER_LIST = "createServerList";
-    public static final String TASK_YANK = "yank";
 
     /** The local Maven repository maven-publish wrote ({@code build/magpie-repo}). */
     public static final String REPO_DIR = "repoDir";
@@ -74,9 +73,6 @@ public final class EngineConfig {
     public static final String PARTIAL = "partial";
     /** Blossom servers for {@link #TASK_CREATE_SERVER_LIST}. */
     public static final String SERVERS = "servers";
-    /** Release event id for {@link #TASK_YANK}. */
-    public static final String RELEASE_ID = "releaseId";
-    public static final String REASON = "reason";
     /** "true" to skip publishing events (dry run). */
     public static final String DRY_RUN = "dryRun";
 }

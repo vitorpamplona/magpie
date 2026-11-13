@@ -34,7 +34,6 @@ public data class VersionEntry(
     val version: String,
     /** Unix seconds the version was published (the winning event's `created_at`). */
     val publishedAt: Long,
-    val yanked: Boolean = false,
 )
 
 /**
@@ -50,17 +49,15 @@ public object MetadataGenerator {
 
     /**
      * Module-level metadata. [versions] in publication order. `latest` is the newest version of
-     * any kind and `release` the newest non-snapshot; yanked versions stay listed (they still
-     * resolve) but are never `latest` or `release`.
+     * any kind and `release` the newest non-snapshot.
      */
     public fun artifactMetadata(
         module: ModuleId,
         versions: List<VersionEntry>,
     ): String {
         val ordered = versions.sortedWith(compareBy<VersionEntry>({ it.publishedAt })).distinctBy { it.version }
-        val live = ordered.filter { !it.yanked }
-        val latest = live.lastOrNull()?.version
-        val release = live.lastOrNull { !isSnapshotVersion(it.version) }?.version
+        val latest = ordered.lastOrNull()?.version
+        val release = ordered.lastOrNull { !isSnapshotVersion(it.version) }?.version
         val lastUpdated = ordered.maxOfOrNull { it.publishedAt }
         return buildString {
             append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")

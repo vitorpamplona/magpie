@@ -119,15 +119,6 @@ class WinnerSelectionTest {
     }
 
     @Test
-    fun yanksOnlyCountFromTheAuthor() {
-        val release = release(alice, "1.0", 100)
-        val forgedYank = mallory.signed(MagpieYankEvent.build(release, "bad", 150))
-        assertNull(WinnerSelection.yankOf(release, listOf(forgedYank)))
-        val yank = alice.signed(MagpieYankEvent.build(release, "CVE-2026-1", 200))
-        assertEquals("CVE-2026-1", assertNotNull(WinnerSelection.yankOf(release, listOf(forgedYank, yank))).reason())
-    }
-
-    @Test
     fun signaturesVerifyWithThePureKotlinSecp256k1() {
         val release = release(alice, "1.0", 100)
         assertTrue(EventVerification.isValid(release))

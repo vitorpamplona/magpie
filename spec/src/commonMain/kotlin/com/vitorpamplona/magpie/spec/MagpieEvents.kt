@@ -165,47 +165,6 @@ public class MagpieSnapshotEvent(
     }
 }
 
-/** Marks a release as deprecated. Yanked releases still resolve. */
-public class MagpieYankEvent(
-    id: HexKey,
-    pubKey: HexKey,
-    createdAt: Long,
-    tags: TagArray,
-    content: String,
-    sig: HexKey,
-) : Event(id, pubKey, createdAt, KIND, tags, content, sig) {
-    /** The release ids this yank applies to. */
-    public fun releaseIds(): List<String> = tags.values(MagpieSpec.TAG_EVENT)
-
-    public fun moduleKeys(): List<String> = tags.values(MagpieSpec.TAG_MODULE)
-
-    public fun version(): String? = tags.firstValue(MagpieSpec.TAG_VERSION)
-
-    /** Why it was yanked (free text). */
-    public fun reason(): String = content
-
-    /** A yank only counts when the release's own author signed it. */
-    public fun appliesTo(release: MagpieReleaseEvent): Boolean = release.id in releaseIds() && release.pubKey == pubKey
-
-    public companion object {
-        public const val KIND: Int = MagpieSpec.KIND_YANK
-
-        public fun build(
-            release: MagpieReleaseEvent,
-            reason: String,
-            createdAt: Long,
-        ): EventTemplate<MagpieYankEvent> {
-            val tags = mutableListOf<Array<String>>()
-            tags += arrayOf(MagpieSpec.TAG_EVENT, release.id)
-            tags += arrayOf(MagpieSpec.TAG_KIND, MagpieSpec.KIND_RELEASE.toString())
-            release.moduleKeys().forEach { tags += arrayOf(MagpieSpec.TAG_MODULE, it) }
-            release.version()?.let { tags += arrayOf(MagpieSpec.TAG_VERSION, it) }
-            tags += arrayOf(MagpieSpec.TAG_ALT, "Yanked ${release.coordinate()}: $reason")
-            return EventTemplate(createdAt, KIND, tags.toTypedArray(), reason)
-        }
-    }
-}
-
 /** The files a `#x` lookup should find: jars, aars, klibs, POMs and Gradle module metadata. */
 public fun primaryHashesOf(manifest: Manifest): List<String> =
     manifest.files.entries
@@ -273,9 +232,6 @@ public object MagpieEvents {
             MagpieSpec.KIND_SNAPSHOT ->
                 event as? MagpieSnapshotEvent
                     ?: MagpieSnapshotEvent(event.id, event.pubKey, event.createdAt, event.tags, event.content, event.sig)
-            MagpieSpec.KIND_YANK ->
-                event as? MagpieYankEvent
-                    ?: MagpieYankEvent(event.id, event.pubKey, event.createdAt, event.tags, event.content, event.sig)
             else -> null
         }
 }

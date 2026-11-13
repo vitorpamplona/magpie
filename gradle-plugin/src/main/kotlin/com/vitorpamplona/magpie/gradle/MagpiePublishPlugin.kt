@@ -90,7 +90,6 @@ class MagpieSignerSpec {
  * - `publishToNostr` (`--partial` on each host of a multi-host build)
  * - `closeNostrRelease` merges the partial manifests and signs once
  * - `createNostrServerList --server=https://…` publishes your Blossom server list (kind 10063)
- * - `yankNostrRelease --release=<event id> --reason=…`
  */
 class MagpiePublishPlugin : Plugin<Project> {
     override fun apply(project: Project) {
@@ -155,11 +154,6 @@ class MagpiePublishPlugin : Plugin<Project> {
             configure(this)
             description = "Publishes a Blossom server list (kind 10063) for the signer: --server=https://… (repeatable)."
             engineTask.set(EngineConfig.TASK_CREATE_SERVER_LIST)
-        }
-        project.tasks.register("yankNostrRelease", YankReleaseTask::class.java) {
-            configure(this)
-            description = "Marks a release as yanked: --release=<event id> --reason=… It keeps resolving."
-            engineTask.set(EngineConfig.TASK_YANK)
         }
     }
 }

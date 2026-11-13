@@ -12,8 +12,7 @@ the groups it uses to a publisher key.
   pinned key wins, and a lock file pins the one you first resolved.
 - Every file is checked against its sha256; every event against its signature (in pure Kotlin:
   no native code in your Gradle daemon).
-- `-SNAPSHOT` versions, yanks (deprecated but still resolvable), `--offline`, the configuration
-  cache, dynamic versions (`1.+`) and every checksum sidecar Gradle or Maven asks for work.
+- `-SNAPSHOT` versions, `--offline`, the configuration cache, dynamic versions (`1.+`) and every checksum sidecar Gradle or Maven asks for work.
 - A multi-host Kotlin Multiplatform release (Linux + macOS CI) is signed once, after every host's
   files are in and every `.module` reference checks out.
 
@@ -80,14 +79,13 @@ configuration cache: they're read from the environment when the task runs.
 
 1. reads your Blossom server list (kind 10063) and write relays (NIP-65); with no server list it
    stops and tells you to run `./gradlew createNostrServerList --server=https://your.blossom.server`;
-2. refuses if this version is already released (bump it, or yank the old one);
+2. refuses if this version is already released (publish a new version instead);
 3. checks every blob against every server (BUD-06 preflight) and stops **before signing** if a
    blob fits on none;
 4. uploads what's missing under **one** BUD-02 authorization, uploads the manifest, signs the
    release and publishes it: **two signatures** per release.
 
-`yankNostrRelease --release=<event id> --reason="CVE-…"` deprecates a release; builds that use it
-keep working and print the reason.
+A bad release is fixed the Maven Central way: publish a new version. There is no yank.
 
 ### Multi-host Kotlin Multiplatform
 

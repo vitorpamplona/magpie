@@ -229,32 +229,6 @@ abstract class CreateServerListTask : MagpieEngineTask() {
     }
 }
 
-abstract class YankReleaseTask : MagpieEngineTask() {
-    @get:Input
-    @get:Optional
-    abstract val releaseId: Property<String>
-
-    @get:Input
-    @get:Optional
-    abstract val reason: Property<String>
-
-    @Option(option = "release", description = "The release event id to yank.")
-    fun setReleaseOption(value: String) {
-        releaseId.set(value)
-    }
-
-    @Option(option = "reason", description = "Why (shown to everyone who resolves it).")
-    fun setReasonOption(value: String) {
-        reason.set(value)
-    }
-
-    override fun extraConfig(): Map<String, String> =
-        mapOf(
-            EngineConfig.RELEASE_ID to (releaseId.orNull ?: throw GradleException("Give --release=<event id>")),
-            EngineConfig.REASON to reason.getOrElse(""),
-        )
-}
-
 /** Runs in the worker process: loads the engine with signing and runs the task. */
 abstract class MagpieWorkAction : WorkAction<MagpieWorkAction.Params> {
     interface Params : WorkParameters {

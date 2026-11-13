@@ -140,17 +140,6 @@ public class MagpieEngineImpl : MagpieEngine {
                             mapOf("event" to event.id)
                         }
 
-                        EngineConfig.TASK_YANK -> {
-                            val relays = (config.list(EngineConfig.PUBLISH_RELAYS) + config.list(EngineConfig.INDEXER_RELAYS)).distinct()
-                            val event =
-                                publisher.yank(
-                                    config.getValue(EngineConfig.RELEASE_ID),
-                                    config[EngineConfig.REASON].orEmpty(),
-                                    relays,
-                                )
-                            mapOf("event" to event.id)
-                        }
-
                         else -> {
                             throw IllegalArgumentException("Unknown Magpie task '$task'")
                         }

@@ -33,7 +33,7 @@ public interface MagpieEngine {
 
     /**
      * Runs one publishing task ({@link EngineConfig#TASK_PUBLISH}, {@link EngineConfig#TASK_CLOSE},
-     * {@link EngineConfig#TASK_CREATE_SERVER_LIST}, {@link EngineConfig#TASK_YANK}) and returns a
+     * {@link EngineConfig#TASK_CREATE_SERVER_LIST}) and returns a
      * summary (event ids, manifest hash).
      */
     Map<String, String> runTask(String task, Map<String, String> config, EngineLogger logger) throws Exception;

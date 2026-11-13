@@ -18,9 +18,9 @@ publisher, and the optional gateway is the same resolver behind Ktor.
 
 | Module | What | Depends on |
 |---|---|---|
-| `spec/` | Kotlin Multiplatform `commonMain`, no I/O: `MagpieSpec` (every kind and tag), `Coordinate`/`ModuleId`, `MavenPath` (parses `…/artifact/version/file` from the end), `Manifest` (RFC 8785 canonical JSON, merge of partials), `MagpieReleaseEvent`/`MagpieSnapshotEvent`/`MagpieYankEvent` (builders and readers), `WinnerSelection`, `EventVerification` (pure-Kotlin Schnorr), `LockFile` | Quartz |
+| `spec/` | Kotlin Multiplatform `commonMain`, no I/O: `MagpieSpec` (every kind and tag), `Coordinate`/`ModuleId`, `MavenPath` (parses `…/artifact/version/file` from the end), `Manifest` (RFC 8785 canonical JSON, merge of partials), `MagpieReleaseEvent`/`MagpieSnapshotEvent` (builders and readers), `WinnerSelection`, `EventVerification` (pure-Kotlin Schnorr), `LockFile` | Quartz |
 | `bridge/` | Java interfaces between the plugin and the engine, JDK types only | — |
-| `core/` | The engine (JVM). `resolve/`: `RelayQuery`, `BlobFetcher`/`BlobStore`, `Resolver` (release/snapshot/manifest/blob lookups and caches), `TrustPolicy`/`LockStore`, `MetadataGenerator`, `ChecksumFiles`, `Router`, `LocalRepoServer`, `RepositoryMirror`. `publish/`: `RepoScanner`, `ModuleChecker`, `BlossomClient` (uploader), `MagpieSigner` (nsec, NIP-46), `Publisher` (publish, partial, close, server list, yank). `engine/`: `MagpieEngineImpl` (the bridge entry point), `ResolverStack` | spec, Quartz, OkHttp, coroutines |
+| `core/` | The engine (JVM). `resolve/`: `RelayQuery`, `BlobFetcher`/`BlobStore`, `Resolver` (release/snapshot/manifest/blob lookups and caches), `TrustPolicy`/`LockStore`, `MetadataGenerator`, `ChecksumFiles`, `Router`, `LocalRepoServer`, `RepositoryMirror`. `publish/`: `RepoScanner`, `ModuleChecker`, `BlossomClient` (uploader), `MagpieSigner` (nsec, NIP-46), `Publisher` (publish, partial, close, server list). `engine/`: `MagpieEngineImpl` (the bridge entry point), `ResolverStack` | spec, Quartz, OkHttp, coroutines |
 | `gradle-plugin/` | `MagpieSettingsPlugin` (resolve), `MagpiePublishPlugin` (publish), `EngineLoader`, `MagpieResolverService` | bridge (embedded), core (nested jars) |
 | `gateway/` | Ktor app + Dockerfile around the same `Router`, with a group→npub allowlist | core |
 | `testkit/` | In-memory relay (Quartz `NostrServer` + in-memory SQLite, over Ktor websockets), in-memory Blossom (BUD-01/02/06), `TestBunker` (NIP-46 via Quartz's signer service), `FakeMavenRepo`, `TestIdentity` | spec, Quartz, Ktor |
@@ -55,7 +55,7 @@ BUD-02 authorization, BUD-06 preflight), which Quartz doesn't have as a client.
      publisher's current kind 10063, then fallbacks, checking its sha256 while streaming;
    - for a checksum sidecar: computes it from the blob (cached next to it); `.sha256` is the blob
      name itself;
-   - for `maven-metadata.xml`: lists releases, snapshots and yanks of the module (30 s cache) and
+   - for `maven-metadata.xml`: lists releases and snapshots of the module (30 s cache) and
      formats them like Maven Central does.
 4. Misses are remembered for 30 s; manifests and blobs never expire; a resolved release is
    reused forever (and pinned in the lock).

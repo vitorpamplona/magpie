@@ -152,7 +152,7 @@ public class Router(
             if (coordinate.isSnapshot) {
                 resolver.snapshot(coordinate, publisher)
             } else {
-                resolver.release(coordinate, publisher)?.also { resolver.yankOf(it) }
+                resolver.release(coordinate, publisher)
             } ?: return RouterResponse.Error(404, "No release of $coordinate")
 
         val manifest = resolver.manifest(publication)

@@ -97,18 +97,6 @@ class JvmEndToEndTest {
     }
 
     @Test
-    fun yankedVersionsStillResolve() {
-        builds.run(builds.javaLibrary("lib", "1.0.0"), "publishToNostr", env = builds.signerEnv)
-        val release = builds.relay.query(Filter(kinds = listOf(MagpieSpec.KIND_RELEASE))).single()
-        builds.run(builds.dir("lib"), "yankNostrRelease", "--release=${release.id}", "--reason=CVE-2026-0002", env = builds.signerEnv)
-        assertEquals(1, builds.relay.query(Filter(kinds = listOf(MagpieSpec.KIND_YANK))).size)
-
-        val result = builds.run(builds.consumer("app", "com.example:greeter:1.0.0"), "run")
-        assertTrue("GREETING: hello from nostr" in result.output)
-        assertTrue("yanked" in result.output && "CVE-2026-0002" in result.output, result.output)
-    }
-
-    @Test
     fun dynamicVersionsUseGeneratedMetadata() {
         builds.run(builds.javaLibrary("lib1", "1.0.0", greeting = "one"), "publishToNostr", env = builds.signerEnv)
         Thread.sleep(1100)

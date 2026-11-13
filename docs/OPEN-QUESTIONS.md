@@ -7,7 +7,7 @@ are hard to reverse once releases exist.
 ## Protocol
 
 1. **Kind numbers and tag letters** (**decide before release**). Placeholders: release `3071`,
-   yank `3072`, snapshot `33071`; tags `j` (module) and `v` (version). All in
+   snapshot `33071`; tags `j` (module) and `v` (version). All in
    `spec/src/commonMain/kotlin/com/vitorpamplona/magpie/spec/MagpieSpec.kt`. Reasoning in
    `NIP-DRAFT.md`. Once real releases exist, changing them strands every published version.
 
@@ -26,10 +26,11 @@ are hard to reverse once releases exist.
 4. **`nip05()` without an argument.** Uses `_@<reversed group>`: `com.example` → `_@example.com`.
    An explicit `nip05("name@domain")` is also accepted.
 
-5. **Yanked versions in `maven-metadata.xml`.** They stay in `<versions>` (they still resolve,
-   and removing them would change what `1.+` sees) but are never `<latest>`/`<release>`, and every
-   build that resolves one logs a warning with the reason. Alternative: drop them from
-   `<versions>` too, so dynamic versions skip them.
+5. **No yanks.** A yank kind was built and then dropped: it couldn't keep a version out of the
+   `<versions>` list Gradle's `1.+` reads, a leaked key could abuse it, and the fix for a bad
+   release is a new version. If deprecation comes back, it should behave like Cargo's yank
+   (left out of `<versions>`, still served to exact and locked requests). Adding a kind later
+   breaks nothing.
 
 6. **A later release of the same version.** The publisher refuses to sign one. If one appears
    anyway (another tool, a compromised key backdating `created_at`), clients keep the earliest,

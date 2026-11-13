@@ -28,9 +28,6 @@ public object MagpieSpec {
     /** Regular (immutable) release event. The earliest one per group:artifact:version wins. */
     public const val KIND_RELEASE: Int = 3071
 
-    /** Yank: deprecates a release. The release keeps being served. */
-    public const val KIND_YANK: Int = 3072
-
     /** Addressable snapshot event, `d` = `group:artifact:version` (a -SNAPSHOT version). */
     public const val KIND_SNAPSHOT: Int = 33071
 
@@ -61,12 +58,6 @@ public object MagpieSpec {
 
     /** Blossom server base URL hint. */
     public const val TAG_SERVER: String = "server"
-
-    /** The release a yank points at. */
-    public const val TAG_EVENT: String = "e"
-
-    /** The kind a yank applies to. */
-    public const val TAG_KIND: String = "k"
 
     /** Addressable identifier (snapshots only). */
     public const val TAG_D: String = "d"

@@ -76,14 +76,14 @@ public class RelayQuery(
             ),
         )
 
-    /** Every release, snapshot and yank of [module]: what `maven-metadata.xml` is built from. */
+    /** Every release and snapshot of [module]: what `maven-metadata.xml` is built from. */
     public suspend fun moduleEvents(
         module: ModuleId,
         publisher: HexKey,
     ): List<Event> =
         query(
             Filter(
-                kinds = listOf(MagpieSpec.KIND_RELEASE, MagpieSpec.KIND_SNAPSHOT, MagpieSpec.KIND_YANK),
+                kinds = listOf(MagpieSpec.KIND_RELEASE, MagpieSpec.KIND_SNAPSHOT),
                 authors = listOf(publisher),
                 tags = mapOf(MagpieSpec.TAG_MODULE to listOf(module.key)),
             ),

@@ -149,16 +149,4 @@ public object WinnerSelection {
             .distinctBy { it.version() }
             .sortedWith(RELEASE_ORDER)
             .toList()
-
-    /** The publisher's yank of [release], if any. */
-    public fun yankOf(
-        release: MagpieReleaseEvent,
-        events: Collection<Event>,
-    ): MagpieYankEvent? =
-        events
-            .asSequence()
-            .mapNotNull { MagpieEvents.wrap(it) as? MagpieYankEvent }
-            .filter { it.appliesTo(release) }
-            .sortedWith(RELEASE_ORDER)
-            .firstOrNull()
 }

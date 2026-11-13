@@ -48,7 +48,7 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
-/** Multi-host releases, BUD-06, auth fallback, snapshots, yanks, NIP-05 trust and NIP-46. */
+/** Multi-host releases, BUD-06, auth fallback, snapshots, NIP-05 trust and NIP-46. */
 class ReleaseLifecycleTest {
     private val world = MagpieWorld()
     private val alice = TestIdentity.ALICE
@@ -175,33 +175,6 @@ class ReleaseLifecycleTest {
             assertTrue("<buildNumber>2</buildNumber>" in stack.get("com/example/lib-jvm/$v/maven-metadata.xml").text())
             assertContentEquals(File(build2.dir, stamped).readBytes(), stack.get("com/example/lib-jvm/$v/lib-jvm-$v.jar").bytes())
         }
-    }
-
-    @Test
-    fun yankedVersionsKeepResolvingButStopBeingTheRelease() {
-        world.setUpPublisher(alice)
-        world.publish(alice, FakeMavenRepo(world.dir("r1")).publish("1.0.0").dir, "1.0.0")
-        Thread.sleep(1100)
-        val bad = world.publish(alice, FakeMavenRepo(world.dir("r2")).publish("1.1.0", content = "bad").dir, "1.1.0")
-        val (publisher, signer) = world.publisher(alice)
-        runBlocking { publisher.yank(bad.eventId!!, "CVE-2026-0001", listOf(world.relay.url)) }
-        assertEquals(1, signer.signatures)
-
-        world.stack(alice).use { stack ->
-            val metadata = stack.get("com/example/lib-jvm/maven-metadata.xml").text()
-            assertTrue("<release>1.0.0</release>" in metadata, metadata)
-            assertTrue("<version>1.1.0</version>" in metadata, "still listed")
-            assertEquals(200, stack.get("com/example/lib-jvm/1.1.0/lib-jvm-1.1.0.jar").status, "still served")
-            assertTrue(world.log.lines.any { it.startsWith("WARN") && "yanked" in it && "CVE-2026-0001" in it }, world.log.lines.joinToString("\n"))
-        }
-    }
-
-    @Test
-    fun yankOnlyByTheReleaseAuthor() {
-        world.setUpPublisher(alice)
-        val release = world.publish(alice, FakeMavenRepo(world.dir("r1")).publish("1.0.0").dir, "1.0.0")
-        val (publisher, _) = world.publisher(TestIdentity.MALLORY)
-        assertFailsWith<IllegalArgumentException> { runBlocking { publisher.yank(release.eventId!!, "mine now", listOf(world.relay.url)) } }
     }
 
     @Test
