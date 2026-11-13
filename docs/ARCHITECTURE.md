@@ -43,8 +43,10 @@ BUD-02 authorization, BUD-06 preflight), which Quartz doesn't have as a client.
    `exclusiveContent` filtered to the configured groups, a Maven repository whose URL is a
    provider of `MagpieResolverService.url`. No network at configuration time.
 2. When Gradle first needs a Magpie group, it evaluates the URL: the build service loads the
-   engine (see *Class loading*) and starts `LocalRepoServer`, a JDK `HttpServer` on
-   `127.0.0.1:0`.
+   engine (see *Class loading*) and starts `LocalRepoServer`, a JDK `HttpServer` on `127.0.0.1`,
+   on a port derived from the cache directory when it's free (so the URL, and Gradle's cache of
+   it, repeat across builds), under a path prefix derived from the configuration (so a build can
+   never reach a server another daemon started with different trust settings).
 3. Per request, `Router`:
    - parses the path (`MavenPath`); unknown groups are 404;
    - finds the trusted key (`TrustPolicy`): by default `releases@<domain>` down the group's
@@ -70,7 +72,7 @@ BUD-02 authorization, BUD-06 preflight), which Quartz doesn't have as a client.
 | `engine/<id>/` | the engine's jars, extracted from the plugin | per plugin version |
 | `blobs/<aa>/<sha256>` | every blob (artifacts and manifests), verified | forever |
 | `checksums/` | computed `.md5`/`.sha1`/`.sha512` | forever |
-| `events/<publisher>/<group>/<artifact>/<version>.json` | the release (or latest snapshot) resolution used | forever (snapshots: refreshed) |
+| `events/<publisher>/<group>/<artifact>/<version>.json` | every candidate release seen for that version (each project selects with its own lock), or the latest snapshot | forever (snapshots: refreshed) |
 | `events/<publisher>/<group>/<artifact>/_module.json` | the last module listing, for offline metadata | refreshed every 30 s online |
 | `servers/<publisher>.json` | the publisher's kind 10063 | refreshed every 10 min online |
 | `mirror/<publisher>/…` | Maven layout for `--offline` | grows as files are served |

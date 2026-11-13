@@ -188,20 +188,23 @@ public class Router(
             )
 
         val checksum = path.checksum
-        if (checksum == ChecksumAlgorithm.SHA256) {
+        if (head && checksum == null) return RouterResponse.Head(entry.size, contentTypeOf(path.fileName), headers)
+        val storedPath = MavenPath.parseFile(coordinate, key.substringAfterLast('/'))!!.toPath()
+        if (checksum == ChecksumAlgorithm.SHA256 && (mirror == null || mirror.has(publisher, storedPath))) {
             // Known from the manifest: no need for the blob.
             return RouterResponse.Bytes(entry.sha256.toByteArray(), "text/plain", headers)
         }
-        if (head && checksum == null) return RouterResponse.Head(entry.size, contentTypeOf(path.fileName), headers)
         val blob = resolver.blob(entry.sha256, entry.size, publication)
+        // Mirror on checksum requests too: Gradle often fetches only a .sha1 and reuses a file it
+        // already has, and the offline mirror must still end up with the module.
+        mirror?.let {
+            mirrorModuleMetadata(it, publisher, manifest, publication, coordinate)
+            it.linkFile(publisher, storedPath, blob)
+            if (key != path.manifestKey) it.linkFile(publisher, path.copy(checksum = null).toPath(), blob)
+        }
         if (checksum != null) {
             val value = checksums.ofBlob(entry.sha256, blob, checksum)
             return RouterResponse.Bytes(value.toByteArray(), "text/plain", headers)
-        }
-        mirror?.let { mirrorModuleMetadata(it, publisher, manifest, publication, coordinate) }
-        mirror?.linkFile(publisher, MavenPath.parseFile(coordinate, key.substringAfterLast('/'))!!.toPath(), blob)
-        if (key != path.manifestKey) {
-            mirror?.linkFile(publisher, path.toPath(), blob)
         }
         return RouterResponse.FileBody(blob, contentTypeOf(path.fileName), headers)
     }
@@ -280,6 +283,11 @@ public class RepositoryMirror(
     public val dir: File,
 ) {
     public fun root(publisher: HexKey): File = File(dir, publisher)
+
+    public fun has(
+        publisher: HexKey,
+        relativePath: String,
+    ): Boolean = File(root(publisher), relativePath).isFile
 
     public fun linkFile(
         publisher: HexKey,

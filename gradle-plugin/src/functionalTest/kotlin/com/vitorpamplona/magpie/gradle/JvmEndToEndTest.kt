@@ -52,9 +52,7 @@ class JvmEndToEndTest {
         val lock = LockFile.parse(File(app, "gradle/magpie.lock").readText())
         assertEquals(releases.single().id, lock.releases["com.example:greeter:1.0.0"]?.eventId)
 
-        // Configuration cache reuse: a new build, a new server on a new port, same result. (The
-        // second run stores again: the first created the engine directory under the cache.)
-        builds.run(app, "run", "--configuration-cache")
+        // Configuration cache reuse: a new build, a new server, the same result.
         val again = builds.run(app, "run", "--configuration-cache", "--rerun-tasks")
         assertTrue("Reusing configuration cache" in again.output || "Configuration cache entry reused" in again.output, again.output)
         assertTrue("GREETING: hello from nostr" in again.output)
@@ -162,5 +160,28 @@ class JvmEndToEndTest {
         builds.run(builds.javaLibrary("lib", "1.0.0", extraMagpie = "verifyReleaseKey.set(false)"), "publishToNostr", env = builds.signerEnv)
         val app = builds.consumer("app", "com.example:greeter:1.0.0", trust = """publisher("${builds.publisher.npub}")""")
         assertTrue("GREETING: hello from nostr" in builds.run(app, "run").output)
+    }
+
+    @Test
+    fun offlineKeepsSubgroupsPinnedToAnotherKey() {
+        val mallory = com.vitorpamplona.magpie.testkit.TestIdentity.MALLORY
+        val noCheck = "verifyReleaseKey.set(false)"
+        builds.run(builds.javaLibrary("a", "1.0.0", extraMagpie = noCheck), "publishToNostr", env = builds.signerEnv)
+        builds.run(builds.javaLibrary("b-setup", "0.0.1", extraMagpie = noCheck), "createNostrServerList", "--server=${builds.blossom.url}", env = mapOf("MAGPIE_NSEC" to mallory.nsec))
+        builds.run(builds.javaLibrary("b", "1.0.0", greeting = "sub", extraMagpie = noCheck, group = "com.example.lib"), "publishToNostr", env = mapOf("MAGPIE_NSEC" to mallory.nsec))
+
+        val app = builds.consumer("app", "com.example:greeter:1.0.0", trust = """publisher("${builds.publisher.npub}")""")
+        File(app, "settings.gradle.kts").writeText(
+            File(app, "settings.gradle.kts").readText().replace(
+                "relayTimeoutMillis.set(3000L)",
+                "relayTimeoutMillis.set(3000L)\n    group(\"com.example.lib\") { publisher(\"${mallory.npub}\") }",
+            ),
+        )
+        File(app, "build.gradle.kts").appendText("\ndependencies { implementation(\"com.example.lib:greeter:1.0.0\") }\n")
+        builds.run(app, "run")
+        builds.relay.close()
+        builds.blossom.available = false
+        val offline = builds.run(app, "run", "--offline", "--refresh-dependencies")
+        assertTrue("GREETING:" in offline.output, offline.output)
     }
 }

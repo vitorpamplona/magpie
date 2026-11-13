@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Magpie gateway: the resolver as an HTTP Maven repository.
 #   docker build -f gateway/Dockerfile -t magpie-gateway .
 #   docker run -p 8080:8080 -v magpie-cache:/var/cache/magpie \
@@ -7,7 +8,9 @@
 FROM eclipse-temurin:21-jdk AS build
 WORKDIR /src
 COPY . .
-RUN ./gradlew --no-daemon --no-configuration-cache :gateway:installDist
+# A cache mount keeps Gradle's downloads across builds, so a source change doesn't re-download
+# every dependency.
+RUN --mount=type=cache,target=/root/.gradle ./gradlew --no-daemon --no-configuration-cache :gateway:installDist
 
 FROM eclipse-temurin:21-jre
 RUN useradd --system --uid 10001 magpie && mkdir -p /var/cache/magpie && chown magpie /var/cache/magpie
@@ -18,5 +21,6 @@ ENV MAGPIE_CACHE_DIR=/var/cache/magpie \
 VOLUME /var/cache/magpie
 EXPOSE 8080
 USER magpie
-HEALTHCHECK --interval=30s --timeout=3s CMD ["sh", "-c", "exec 3<>/dev/tcp/127.0.0.1/${PORT} && printf 'GET /healthz HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q ok <&3"]
+# bash, not sh: /dev/tcp is a bash feature, and the image's /bin/sh is dash.
+HEALTHCHECK --interval=30s --timeout=3s CMD ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/${PORT} && printf 'GET /healthz HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q ok <&3"]
 ENTRYPOINT ["/opt/magpie-gateway/bin/magpie-gateway"]

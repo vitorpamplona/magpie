@@ -29,6 +29,7 @@ import java.io.IOException
 import java.net.URLClassLoader
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.PosixFilePermissions
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 
@@ -89,21 +90,48 @@ internal object EngineLoader {
         val entries = index()
         Files.createDirectories(dir.parentFile.toPath())
         val tmp = Files.createTempDirectory(dir.parentFile.toPath(), dir.name + ".tmp")
-        for (entry in entries) {
-            val bytes =
-                EngineLoader::class.java.classLoader
-                    .getResourceAsStream(ROOT + entry.name)
-                    ?.use { it.readBytes() }
-                    ?: throw IllegalStateException("The Magpie plugin jar is missing $ROOT${entry.name}")
-            check(sha256(bytes) == entry.sha256) { "Corrupt engine jar ${entry.name} in the Magpie plugin" }
-            Files.write(tmp.resolve(entry.name), bytes)
-        }
         try {
-            Files.move(tmp, dir.toPath(), StandardCopyOption.ATOMIC_MOVE)
-        } catch (e: IOException) {
-            // Another build extracted it first; use theirs.
-            for (entry in entries) Files.deleteIfExists(tmp.resolve(entry.name))
-            Files.deleteIfExists(tmp)
+            for (entry in entries) {
+                val bytes =
+                    EngineLoader::class.java.classLoader
+                        .getResourceAsStream(ROOT + entry.name)
+                        ?.use { it.readBytes() }
+                        ?: throw IllegalStateException("The Magpie plugin jar is missing $ROOT${entry.name}")
+                check(sha256(bytes) == entry.sha256) { "Corrupt engine jar ${entry.name} in the Magpie plugin" }
+                Files.write(tmp.resolve(entry.name), bytes)
+                readableByAll(tmp.resolve(entry.name), "rw-r--r--")
+            }
+            // createTempDirectory makes it 0700: a shared Gradle home needs others to read it.
+            readableByAll(tmp, "rwxr-xr-x")
+            var lastFailure: IOException? = null
+            repeat(5) { attempt ->
+                try {
+                    Files.move(tmp, dir.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                    return
+                } catch (e: IOException) {
+                    // Another build may have just extracted it (the move finds the directory
+                    // there), or an antivirus may hold the new files for a moment.
+                    if (Files.isDirectory(dir.toPath())) return
+                    lastFailure = e
+                    Thread.sleep(100L * (attempt + 1))
+                }
+            }
+            throw IllegalStateException("Could not install the Magpie engine into $dir", lastFailure)
+        } finally {
+            if (Files.exists(tmp)) {
+                Files.walk(tmp).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) } }
+            }
+        }
+    }
+
+    private fun readableByAll(
+        path: java.nio.file.Path,
+        permissions: String,
+    ) {
+        try {
+            Files.setPosixFilePermissions(path, PosixFilePermissions.fromString(permissions))
+        } catch (e: UnsupportedOperationException) {
+            // Not a POSIX file system (Windows): its defaults already let other users read.
         }
     }
 
@@ -112,18 +140,24 @@ internal object EngineLoader {
         withSigning: Boolean,
     ): MagpieEngine {
         val (dir, jars) = layout(cacheRoot, withSigning)
-        val key = jars.joinToString(File.pathSeparator) { it.path }
+        // One class loader per engine build and flavour, whatever cache directory builds use: a
+        // daemon running builds with different cache dirs shouldn't load the engine again each time.
+        val key = dir.name + if (withSigning) "+signing" else ""
         loaders[key]?.let { return instantiate(it) }
-        val first = newLoader(jars)
-        val loader =
-            if (probe(first)) {
-                first
-            } else {
-                first.close()
-                extractAll(dir)
-                newLoader(jars).also { check(probe(it)) { "Could not load the Magpie engine from $dir" } }
-            }
-        return instantiate(loaders.putIfAbsent(key, loader) ?: loader)
+        synchronized(loaders) {
+            loaders[key]?.let { return instantiate(it) }
+            val first = newLoader(jars)
+            val loader =
+                if (probe(first)) {
+                    first
+                } else {
+                    first.close()
+                    extractAll(dir)
+                    newLoader(jars).also { check(probe(it)) { "Could not load the Magpie engine from $dir" } }
+                }
+            loaders[key] = loader
+            return instantiate(loader)
+        }
     }
 
     private fun newLoader(jars: List<File>) = URLClassLoader("magpie-engine", jars.map { it.toURI().toURL() }.toTypedArray(), BridgeOnlyClassLoader(EngineLoader::class.java.classLoader))

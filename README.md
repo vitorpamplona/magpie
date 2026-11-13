@@ -37,7 +37,7 @@ magpie {
 
 Then depend on it as usual: `implementation("com.example:lib:1.0.0")`.
 
-The plugin starts a Maven repository on `127.0.0.1:<random port>` inside the Gradle daemon the
+Requires Gradle 8.8 or newer. The plugin starts a Maven repository on `127.0.0.1` inside the Gradle daemon the
 first time Gradle needs one of those groups, and registers it with `exclusiveContent`, so those
 groups never come from anywhere else.
 

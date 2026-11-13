@@ -62,6 +62,8 @@ val engineRuntime: Configuration = configurations.create("engineRuntime") {
     exclude(group = "fr.acinq.secp256k1", module = "secp256k1-kmp-jni-jvm")
     // Quartz's event store; the engine never opens a database.
     exclude(group = "androidx.sqlite")
+    // NIP-77 negentropy, compiled for Java 21; Magpie never syncs, and the daemon may run on 17.
+    exclude(group = "com.vitorpamplona.negentropy")
 }
 
 // Added to the worker process that signs (publishing only).
@@ -90,12 +92,10 @@ val packageEngine = tasks.register<PackageEngine>("packageEngine") {
     outputDir.set(layout.buildDirectory.dir("generated/magpie-engine"))
 }
 
-sourceSets.main {
-    resources.srcDir(packageEngine)
-}
-
+// Into the plugin jar only: as a resource directory it would also fill the sources jar.
 tasks.jar {
     from(embedded)
+    from(packageEngine)
 }
 
 gradlePlugin {
@@ -149,6 +149,15 @@ publishing {
     }
 }
 
+// Each run publishes a new timestamped snapshot of a 30 MB jar: start from an empty repository.
+val cleanFunctionalTestRepo =
+    tasks.register<Delete>("cleanFunctionalTestRepo") {
+        delete(testRepo)
+    }
+tasks.configureEach {
+    if (name.startsWith("publish") && name.endsWith("ToFunctionalTestRepository")) dependsOn(cleanFunctionalTestRepo)
+}
+
 val functionalTestTask =
     tasks.register<Test>("functionalTest") {
         description = "Runs Gradle TestKit builds that publish to and resolve from Nostr + Blossom."
@@ -161,6 +170,8 @@ val functionalTestTask =
         systemProperty("magpie.version", project.version.toString())
         systemProperty("magpie.kmpTargets", providers.gradleProperty("magpie.kmpTargets").getOrElse("jvm"))
         systemProperty("magpie.gradleVersion", providers.gradleProperty("magpie.gradleVersion").getOrElse(""))
+        // A JDK for the test builds' daemons (e.g. 17, to check the daemon side runs there).
+        systemProperty("magpie.daemonJavaHome", providers.gradleProperty("magpie.daemonJavaHome").getOrElse(""))
         providers.environmentVariable("ANDROID_HOME").orNull?.let { environment("ANDROID_HOME", it) }
         maxParallelForks = 1
         maxHeapSize = "1g"

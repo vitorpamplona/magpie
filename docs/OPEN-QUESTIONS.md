@@ -50,7 +50,9 @@ are hard to reverse once releases exist.
    (`maven-metadata.xml`) and snapshots expire (30 s).
 
 8. **Negative cache scope.** Misses (no release, file not in the manifest, unknown group) are
-   remembered for 30 s per daemon; manifests and blobs are never negative-cached.
+   remembered for 30 s per daemon; manifests and blobs are never negative-cached. A query no
+   relay answered is not a miss: it's a 502 (or the disk cache, when it has an answer), and is
+   never remembered.
 
 ## Gradle
 
@@ -78,7 +80,7 @@ are hard to reverse once releases exist.
     fix is `--refresh-dependencies` or a run without the cache.
 
 12. **`--offline`.** Gradle never calls an HTTP repository offline, not even on localhost, and a
-    random port changes the repository's identity in Gradle's cache every build. So offline builds
+    repository whose port can change has no stable identity in Gradle's cache. So offline builds
     resolve from a plain Maven directory the engine fills as it serves
     (`~/.gradle/magpie/mirror/<publisher hex>/`), registered as a `file:` repository inside the
     same `exclusiveContent`. One tree per publisher keeps groups that trust different keys apart.
@@ -88,8 +90,10 @@ are hard to reverse once releases exist.
     settings' ones, so the plugin adds the Magpie repository to such projects after they're
     evaluated.
 
-14. **Minimum Gradle version.** 8.6 (the settings `layout` API) with `includeGroupAndSubgroups`
-    (8.1). Tested on 9.8.2 (the repository's wrapper).
+14. **Minimum Gradle version.** 8.8: earlier versions generate no Kotlin DSL accessor for the
+    `magpie { }` settings extension (8.6/8.7 can only use `configure<MagpieExtension> { }`). CI
+    runs the end-to-end tests on 8.8 with the daemon on JDK 17, on 8.14, and on 9.8.2 (the
+    repository's wrapper).
 
 15. **Lock file writes.** The engine writes `gradle/magpie.lock` during resolution (one writer at
     a time, atomic replace). CI can freeze it (`-Pmagpie.frozenLock=true`): any new entry then

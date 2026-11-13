@@ -102,10 +102,10 @@ class MagpieSettingsPlugin : Plugin<Settings> {
 
         register(settings.dependencyResolutionManagement.repositories)
 
-        // A project that declares its own repositories ignores the settings' ones (unless the
-        // build forbids project repositories): give it the Magpie repository too.
+        // Under PREFER_PROJECT (Gradle's default), a project that declares its own repositories
+        // ignores the settings' ones: give it the Magpie repository too.
         val mode = settings.dependencyResolutionManagement.repositoriesMode.get()
-        if (mode != RepositoriesMode.FAIL_ON_PROJECT_REPOS) {
+        if (mode == RepositoriesMode.PREFER_PROJECT) {
             settings.gradle.beforeProject {
                 val project = this
                 project.afterEvaluate {
@@ -145,15 +145,19 @@ class MagpieSettingsPlugin : Plugin<Settings> {
         lockFile: File?,
     ) {
         val lockedKeys = lockFile?.takeIf { it.isFile }?.let { readLockedPublishers(it) }.orEmpty()
-        groups
-            .groupBy { group ->
-                val pin = group.pin
-                if (pin == MagpieGroup.DOMAIN || pin.startsWith("nip05:")) lockedKeys[group.group] else Bech32.publicKeyHex(pin)
-            }.forEach { (pubKey, sameKey) ->
-                if (pubKey == null) {
-                    logger.warn("Magpie (--offline): no key for ${sameKey.joinToString { it.group }} in magpie.lock yet; resolve once online first")
-                    return@forEach
-                }
+
+        fun keyOf(group: MagpieGroup): String? {
+            val pin = group.pin
+            return if (pin == MagpieGroup.DOMAIN || pin.startsWith("nip05:")) lockedKeys[group.group] else Bech32.publicKeyHex(pin)
+        }
+        val keyed = groups.associateWith { keyOf(it) }
+        keyed.filterValues { it == null }.keys.takeIf { it.isNotEmpty() }?.let { missing ->
+            logger.warn("Magpie (--offline): no key for ${missing.joinToString { it.group }} in magpie.lock yet; resolve once online first")
+        }
+        keyed.entries
+            .filter { it.value != null }
+            .groupBy({ it.value!! }, { it.key })
+            .forEach { (pubKey, sameKey) ->
                 repos.exclusiveContent {
                     forRepositories(
                         repos.maven {
@@ -165,7 +169,14 @@ class MagpieSettingsPlugin : Plugin<Settings> {
                             }
                         },
                     )
-                    filter { sameKey.forEach { includeGroupAndSubgroups(it.group) } }
+                    filter {
+                        sameKey.forEach { group ->
+                            // The group and its subgroups, except subgroups another key owns: two
+                            // exclusive filters claiming one module would hide it from both.
+                            val others = groups.filter { it.group.startsWith(group.group + ".") && keyed[it] != pubKey }
+                            includeGroupByRegex(groupRegex(group.group, others.map { it.group }))
+                        }
+                    }
                 }
             }
     }
@@ -180,6 +191,17 @@ class MagpieSettingsPlugin : Plugin<Settings> {
     internal companion object {
         const val REPO_NAME = "magpie"
     }
+}
+
+/** [group] and its subgroups, minus [excluded] subgroups and theirs. */
+internal fun groupRegex(
+    group: String,
+    excluded: List<String>,
+): String {
+    val q = Regex.escape(group)
+    if (excluded.isEmpty()) return "^$q(\\..*)?$"
+    val except = excluded.joinToString("|") { Regex.escape(it.removePrefix(group)) }
+    return "^$q(?!(?:$except)(?:\\.|$))(\\..*)?$"
 }
 
 /** Repositories this plugin added, for tests and diagnostics. */

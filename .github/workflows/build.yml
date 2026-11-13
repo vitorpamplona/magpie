@@ -56,7 +56,30 @@ jobs:
           name: macos-test-reports
           path: '**/build/reports/tests/'
 
-  gradle8:
+  gradle-floor:
+    name: Oldest supported Gradle (8.8), daemon on JDK 17
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        id: jdk17
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+      # The test builds run on Gradle 8.8 with their daemon on JDK 17: the plugin and the
+      # resolution engine must load there; the signing worker picks a Java 21 toolchain.
+      - run: >-
+          ./gradlew :gradle-plugin:functionalTest --tests '*JvmEndToEndTest*'
+          -Pmagpie.gradleVersion=8.8
+          -Pmagpie.daemonJavaHome=${{ steps.jdk17.outputs.path }}
+
+  gradle-latest-8:
     name: Gradle 8.14 consumers
     runs-on: ubuntu-latest
     timeout-minutes: 30

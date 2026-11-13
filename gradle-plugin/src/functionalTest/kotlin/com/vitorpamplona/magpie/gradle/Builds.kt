@@ -107,6 +107,7 @@ class Builds : AutoCloseable {
         greeting: String = "hello from nostr",
         artifact: String = "greeter",
         extraMagpie: String = "",
+        group: String = "com.example",
     ): File {
         val d = dir(name)
         File(d, "settings.gradle.kts").writeText(
@@ -122,7 +123,7 @@ class Builds : AutoCloseable {
                 `java-library`
                 id("com.vitorpamplona.magpie.publish") version "$pluginVersion"
             }
-            group = "com.example"
+            group = "$group"
             version = "$version"
             java { withSourcesJar() }
             publishing { publications { create<MavenPublication>("maven") { from(components["java"]) } } }
@@ -188,6 +189,10 @@ class Builds : AutoCloseable {
         vararg args: String,
         env: Map<String, String> = emptyMap(),
     ): GradleRunner {
+        System.getProperty("magpie.daemonJavaHome").orEmpty().takeIf { it.isNotBlank() }?.let { home ->
+            val props = File(projectDir, "gradle.properties")
+            if (!props.isFile || "org.gradle.java.home" !in props.readText()) props.appendText("\norg.gradle.java.home=$home\n")
+        }
         val runner =
             GradleRunner
                 .create()
