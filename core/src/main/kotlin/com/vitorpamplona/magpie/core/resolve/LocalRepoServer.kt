@@ -24,6 +24,7 @@ import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import com.vitorpamplona.magpie.core.util.MagpieLog
 import kotlinx.coroutines.runBlocking
+import java.net.BindException
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.concurrent.ExecutorService
@@ -39,12 +40,18 @@ import java.util.concurrent.atomic.AtomicInteger
 public class LocalRepoServer(
     private val router: Router,
     private val log: MagpieLog,
-    port: Int = 0,
-    threads: Int = 8,
+    /** Tried first, so the repository URL (and Gradle's cache of it) stays the same across builds; 0 for any. */
+    preferredPort: Int = 0,
+    /**
+     * Every URL starts with `/<prefix>/`, derived from the resolver's configuration: a build that
+     * reaches a server another daemon started with different trust settings gets 404s, never
+     * that daemon's artifacts.
+     */
+    private val prefix: String = "",
 ) : AutoCloseable {
     private val executor: ExecutorService =
-        Executors.newFixedThreadPool(
-            threads,
+        // Grows with demand: requests waiting on a relay don't hold up requests the cache can answer.
+        Executors.newCachedThreadPool(
             object : ThreadFactory {
                 private val count = AtomicInteger()
 
@@ -52,17 +59,30 @@ public class LocalRepoServer(
             },
         )
 
-    private val server: HttpServer =
-        HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), port), 64).apply {
+    private val server: HttpServer = bind(preferredPort)
+
+    private fun bind(preferredPort: Int): HttpServer {
+        val created =
+            if (preferredPort > 0) {
+                try {
+                    HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), preferredPort), 64)
+                } catch (e: BindException) {
+                    null
+                }
+            } else {
+                null
+            } ?: HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 64)
+        return created.apply {
             createContext("/") { exchange -> handle(exchange) }
             executor = this@LocalRepoServer.executor
             start()
         }
+    }
 
     public val port: Int get() = server.address.port
 
     /** The repository base URL Gradle points at. */
-    public val url: String get() = "http://127.0.0.1:$port/"
+    public val url: String get() = "http://127.0.0.1:$port/" + (if (prefix.isEmpty()) "" else "$prefix/")
 
     private fun handle(exchange: HttpExchange) {
         try {
@@ -72,7 +92,17 @@ public class LocalRepoServer(
                 return
             }
             val head = method == "HEAD"
-            val response = runBlocking { router.handle(exchange.requestURI.rawPath) }
+            val raw = exchange.requestURI.rawPath
+            val path =
+                if (prefix.isEmpty()) {
+                    raw
+                } else if (raw.startsWith("/$prefix/")) {
+                    raw.substring(prefix.length + 1)
+                } else {
+                    exchange.sendResponseHeaders(404, -1)
+                    return
+                }
+            val response = runBlocking { router.handle(path, head) }
             response.headers.forEach { (k, v) -> exchange.responseHeaders.add(k, v) }
             when (response) {
                 is RouterResponse.Error -> {
@@ -84,6 +114,11 @@ public class LocalRepoServer(
                         exchange.sendResponseHeaders(response.status, body.size.toLong())
                         exchange.responseBody.use { it.write(body) }
                     }
+                }
+
+                is RouterResponse.Head -> {
+                    exchange.responseHeaders.add("Content-Type", response.contentType)
+                    send(exchange, true, response.length) {}
                 }
 
                 is RouterResponse.Bytes -> {
@@ -123,5 +158,10 @@ public class LocalRepoServer(
         server.stop(0)
         executor.shutdownNow()
         executor.awaitTermination(2, TimeUnit.SECONDS)
+    }
+
+    public companion object {
+        /** A port in 20000..49999 derived from [seed] (the cache directory), so it repeats across builds. */
+        public fun preferredPortFor(seed: String): Int = 20_000 + Math.floorMod(seed.hashCode(), 30_000)
     }
 }

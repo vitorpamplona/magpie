@@ -30,6 +30,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.IOException
+import java.net.InetAddress
 import java.net.UnknownHostException
 
 /** What a NIP-05 lookup said. Only [Absent] lets a caller move on to the next candidate. */
@@ -60,6 +61,13 @@ public fun interface Nip05Resolver {
 public class HttpNip05Resolver(
     http: OkHttpClient,
     private val baseUrlTemplate: String? = null,
+    /**
+     * Whether DNS answers for a host. The JDK reports NXDOMAIN, SERVFAIL and timeouts alike, so
+     * a failed lookup only counts as "no such domain" when the registrable domain above it
+     * resolves (DNS works, the subdomain just isn't there).
+     */
+    private val resolves: (String) -> Boolean = { host -> runCatching { InetAddress.getAllByName(host).isNotEmpty() }.getOrDefault(false) },
+    private val registrableDomain: (String) -> String? = PublicSuffix::registrableDomain,
 ) : Nip05Resolver {
     private val client =
         http
@@ -85,9 +93,11 @@ public class HttpNip05Resolver(
                         }
 
                         else -> {
+                            val bytes = response.body.byteStream().use { it.readNBytes(MAX_BODY + 1) }
+                            if (bytes.size > MAX_BODY) return@use Nip05Answer.Unreachable("nostr.json at $url is larger than ${MAX_BODY / 1024} KB")
                             val names =
                                 try {
-                                    Nip05Parser().parse(response.body.string()).names
+                                    Nip05Parser().parse(bytes.decodeToString()).names
                                 } catch (e: Exception) {
                                     return@use Nip05Answer.Unreachable("unreadable nostr.json at $url")
                                 }
@@ -100,13 +110,20 @@ public class HttpNip05Resolver(
                     }
                 }
             } catch (e: UnknownHostException) {
-                Nip05Answer.Absent
+                val parent = registrableDomain(id.domain)
+                if (parent != null && parent != id.domain && resolves(parent)) {
+                    Nip05Answer.Absent
+                } else {
+                    Nip05Answer.Unreachable("DNS lookup for ${id.domain} failed")
+                }
             } catch (e: IOException) {
                 Nip05Answer.Unreachable("${e.javaClass.simpleName}: ${e.message} ($url)")
             }
         }
     }
 }
+
+private const val MAX_BODY = 64 * 1024
 
 /** The public suffix list OkHttp ships, for [ReleaseIdentity]. */
 public object PublicSuffix {

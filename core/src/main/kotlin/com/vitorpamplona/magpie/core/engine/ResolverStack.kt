@@ -35,6 +35,7 @@ import com.vitorpamplona.magpie.core.resolve.Resolver
 import com.vitorpamplona.magpie.core.resolve.ResolverSettings
 import com.vitorpamplona.magpie.core.resolve.Router
 import com.vitorpamplona.magpie.core.resolve.TrustPolicy
+import com.vitorpamplona.magpie.core.util.Hashing
 import com.vitorpamplona.magpie.core.util.MagpieLog
 import okhttp3.OkHttpClient
 import java.io.File
@@ -53,6 +54,9 @@ public object Http {
 
 /** Everything resolution needs, wired from a configuration map; shared by the plugin and the gateway. */
 public class ResolverStack(
+    /** A short hash of the configuration: the local server's URL prefix, so servers with different trust never mix. */
+    public val configId: String,
+    public val cacheDir: File,
     public val resolver: Resolver,
     public val router: Router,
     public val mirror: RepositoryMirror,
@@ -111,7 +115,16 @@ public class ResolverStack(
             val mirror = RepositoryMirror(File(cacheDir, "mirror"))
             val useMirror = config[MIRROR]?.toBoolean() ?: true
             val router = Router(resolver, ChecksumFiles(File(cacheDir, "checksums")), log, mirror.takeIf { useMirror })
-            return ResolverStack(resolver, router, mirror, offline, nostr, http)
+            val configId =
+                Hashing
+                    .sha256(
+                        config
+                            .toSortedMap()
+                            .entries
+                            .joinToString("\n") { "${it.key}=${it.value}" }
+                            .toByteArray(),
+                    ).substring(0, 16)
+            return ResolverStack(configId, cacheDir, resolver, router, mirror, offline, nostr, http)
         }
     }
 }

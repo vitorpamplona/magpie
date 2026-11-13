@@ -37,8 +37,10 @@ import com.vitorpamplona.magpie.spec.ReleaseSelection
 import com.vitorpamplona.magpie.spec.WinnerSelection
 import com.vitorpamplona.quartz.nip01Core.core.Event
 import com.vitorpamplona.quartz.nip01Core.core.HexKey
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.sync.withLock
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 public data class ResolverSettings(
     val relays: List<String>,
@@ -75,6 +77,7 @@ public class Resolver(
     private val misses = ExpiringCache<String, Unit>(MAX_ENTRIES, clock)
     private val manifests = ExpiringCache<String, Manifest>(MAX_ENTRIES, clock)
     private val locks = StripedMutex()
+    private val downloads = ConcurrentHashMap<String, CompletableDeferred<File>>()
 
     private val eventsDir = File(settings.cacheDir, "events")
 
@@ -304,6 +307,25 @@ public class Resolver(
         publication: MagpiePublicationEvent,
     ): File {
         fetcher.store.get(sha256)?.let { return it }
+        // One download per blob, however many requests (and mirror writes) want it at once.
+        val mine = CompletableDeferred<File>()
+        val running = downloads.putIfAbsent(sha256, mine)
+        if (running != null) return running.await()
+        try {
+            return fetchBlob(sha256, size, publication).also { mine.complete(it) }
+        } catch (e: Throwable) {
+            mine.completeExceptionally(e)
+            throw e
+        } finally {
+            downloads.remove(sha256, mine)
+        }
+    }
+
+    private suspend fun fetchBlob(
+        sha256: String,
+        size: Long,
+        publication: MagpiePublicationEvent,
+    ): File {
         if (!query.online && settings.offline) throw BlobNotFoundException(sha256, emptyList(), listOf("offline, and not in the cache"))
         val tried = mutableSetOf<String>()
         val hints = publication.servers().map { it.trimEnd('/') }

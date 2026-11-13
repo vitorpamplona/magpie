@@ -231,4 +231,42 @@ class ReleaseKeyTest {
             assertTrue("https://example.com/.well-known/nostr.json" in none.message!! && alice.pubKey in none.message!!, none.message)
         }
     }
+
+    @Test
+    fun aFailedDnsLookupIsOnlyAbsenceWhenTheParentDomainResolves() {
+        // .invalid never resolves; whether that means "absent" depends on the parent check.
+        fun resolver(parentResolves: Boolean) = HttpNip05Resolver(Http.client(), "http://{domain}", resolves = { parentResolves }, registrableDomain = { "example.invalid" })
+        runBlocking {
+            assertEquals(Nip05Answer.Absent, resolver(parentResolves = true).lookup("releases@lib.example.invalid"))
+            assertIs<Nip05Answer.Unreachable>(resolver(parentResolves = false).lookup("releases@lib.example.invalid"))
+        }
+    }
+
+    @Test
+    fun oversizedNostrJsonIsRefused() {
+        val server =
+            HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+                createContext("/") { ex ->
+                    val body = ("{\"names\":{\"releases\":\"${alice.pubKey}\"},\"pad\":\"" + "x".repeat(100_000) + "\"}").toByteArray()
+                    ex.sendResponseHeaders(200, body.size.toLong())
+                    ex.responseBody.use { it.write(body) }
+                }
+                start()
+            }
+        try {
+            val answer = runBlocking { HttpNip05Resolver(Http.client(), "http://127.0.0.1:${server.address.port}/{domain}").lookup("releases@example.com") }
+            assertIs<Nip05Answer.Unreachable>(answer)
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
+    fun aFailedLookupIsRememberedBriefly() {
+        val table = Table(mutableMapOf())
+        val policy = policy(table)
+        assertFailsWith<MagpieSecurityException> { publisherOf(policy) }
+        assertFailsWith<MagpieSecurityException> { publisherOf(policy) }
+        assertEquals(2, table.asked.size, "the second request reused the failure instead of walking again")
+    }
 }

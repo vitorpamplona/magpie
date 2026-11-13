@@ -20,8 +20,11 @@
  */
 package com.vitorpamplona.magpie.core.resolve
 
+import com.vitorpamplona.magpie.core.util.Clock
+import com.vitorpamplona.magpie.core.util.ExpiringCache
 import com.vitorpamplona.magpie.core.util.Files2
 import com.vitorpamplona.magpie.core.util.MagpieLog
+import com.vitorpamplona.magpie.core.util.StripedMutex
 import com.vitorpamplona.magpie.spec.Coordinate
 import com.vitorpamplona.magpie.spec.LockFile
 import com.vitorpamplona.magpie.spec.LockedPublisher
@@ -32,6 +35,7 @@ import com.vitorpamplona.quartz.nip01Core.core.HexKey
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 /** How a group's publisher is trusted. */
 public sealed interface Pin {
@@ -151,9 +155,15 @@ public class TrustPolicy(
     private val offline: Boolean,
     private val log: MagpieLog,
     private val registrableDomain: (String) -> String? = PublicSuffix::registrableDomain,
+    private val clock: Clock = Clock.SYSTEM,
+    /** How long a failed lookup is remembered, so parallel requests don't each repeat it. */
+    private val failureTtlMs: Long = 30_000,
 ) {
-    private val verified = mutableMapOf<String, HexKey>()
-    private val mutex = Mutex()
+    private val verified = ConcurrentHashMap<String, HexKey>()
+    private val failures = ExpiringCache<String, MagpieSecurityException>(1_000, clock)
+
+    // One lookup per group at a time; groups don't wait for each other.
+    private val locks = StripedMutex()
 
     init {
         rules.forEach { rule ->
@@ -196,9 +206,23 @@ public class TrustPolicy(
         }
     }
 
-    private suspend fun vouchedKey(rule: GroupRule): HexKey =
-        mutex.withLock {
+    private suspend fun vouchedKey(rule: GroupRule): HexKey {
+        verified[rule.group]?.let { return it }
+        failures.get(rule.group)?.let { throw it }
+        return locks.forKey(rule.group).withLock {
             verified[rule.group]?.let { return it }
+            failures.get(rule.group)?.let { throw it }
+            try {
+                decideKey(rule)
+            } catch (e: MagpieSecurityException) {
+                failures.put(rule.group, e, failureTtlMs)
+                throw e
+            }
+        }
+    }
+
+    private suspend fun decideKey(rule: GroupRule): HexKey {
+        run {
             val identifiers = identifiersFor(rule)
             val locked = lock.current().publishers[rule.group]
             if (offline) {
@@ -255,8 +279,9 @@ public class TrustPolicy(
                     }
                 }
             verified[rule.group] = key
-            key
+            return key
         }
+    }
 
     /** The manifest the lock pins for [coordinate], if any. */
     public fun lockedManifest(coordinate: Coordinate): String? = lock.current().releaseFor(coordinate)?.manifestSha256

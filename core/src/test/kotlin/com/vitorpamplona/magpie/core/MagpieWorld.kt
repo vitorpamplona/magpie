@@ -147,6 +147,7 @@ fun RouterResponse.bytes(): ByteArray =
         is RouterResponse.Bytes -> bytes
         is RouterResponse.FileBody -> file.readBytes()
         is RouterResponse.Error -> throw AssertionError("HTTP $status: $message")
+        is RouterResponse.Head -> throw AssertionError("HEAD answer has no body")
     }
 
 fun RouterResponse.text(): String = bytes().decodeToString()

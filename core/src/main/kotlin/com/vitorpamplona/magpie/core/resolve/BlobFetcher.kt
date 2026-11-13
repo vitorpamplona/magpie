@@ -26,6 +26,7 @@ import com.vitorpamplona.magpie.core.util.MagpieLog
 import com.vitorpamplona.magpie.spec.isSha256Hex
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -116,6 +117,10 @@ public class BlobFetcher(
         val failures = mutableListOf<String>()
         for (server in servers.map { it.trimEnd('/') }.distinct()) {
             tried += server
+            if ("$server/$sha256".toHttpUrlOrNull() == null) {
+                failures += "$server: not a URL"
+                continue
+            }
             try {
                 val file = download(server, sha256, expectedSize)
                 if (file != null) return file

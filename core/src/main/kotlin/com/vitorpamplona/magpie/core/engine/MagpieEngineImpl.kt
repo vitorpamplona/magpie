@@ -73,7 +73,7 @@ public class MagpieEngineImpl : MagpieEngine {
     ): ResolverHandle {
         val log = BridgeLog(logger)
         val stack = ResolverStack.create(config, log)
-        val server = LocalRepoServer(stack.router, log)
+        val server = LocalRepoServer(stack.router, log, LocalRepoServer.preferredPortFor(stack.cacheDir.absolutePath), stack.configId)
         log.info(
             "Magpie repository at ${server.url} (${if (stack.offline) {
                 "offline"

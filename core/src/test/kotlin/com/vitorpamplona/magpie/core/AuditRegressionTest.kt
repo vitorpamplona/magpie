@@ -39,6 +39,8 @@ import com.vitorpamplona.quartz.nip01Core.core.Event
 import com.vitorpamplona.quartz.nip01Core.core.HexKey
 import com.vitorpamplona.quartz.nip01Core.relay.filters.Filter
 import com.vitorpamplona.quartz.nip01Core.signers.EventTemplate
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.net.ServerSocket
@@ -198,5 +200,157 @@ class AuditRegressionTest {
         }
         assertEquals(0, partials.listFiles()!!.size)
         assertEquals(0, world.blossom.uploads.get())
+    }
+
+    // ---- Resolver hardening ----
+
+    @Test
+    fun aMalformedServerUrlDoesNotStopTheFallbackChain() {
+        world.setUpPublisher(alice)
+        val repo = FakeMavenRepo(world.dir("repo")).publish("1.0.0")
+        val scanned = RepoScanner.scan(repo.dir, "com.example", "1.0.0", "lib")
+        scanned.files.values.forEach { world.blossom.put(it.readBytes()) }
+        world.blossom.put(scanned.manifest.toBytes())
+        world.relay.add(alice.sign(MagpieReleaseEvent.build(scanned.manifest, servers = listOf("blossom.example.com", world.blossom.url), createdAt = 100)))
+        world.stack(alice).use { assertEquals(200, it.get("com/example/lib-jvm/1.0.0/lib-jvm-1.0.0.jar").status) }
+    }
+
+    @Test
+    fun concurrentRequestsForOneBlobDownloadItOnce() {
+        world.setUpPublisher(alice)
+        world.publish(alice, FakeMavenRepo(world.dir("repo")).publish("1.0.0").dir, "1.0.0")
+        val before = world.blossom.downloads.get()
+        world.stack(alice).use { stack ->
+            runBlocking {
+                (1..12)
+                    .map { async(Dispatchers.IO) { stack.router.handle("com/example/lib-jvm/1.0.0/lib-jvm-1.0.0.jar") } }
+                    .forEach { assertEquals(200, it.await().status) }
+            }
+        }
+        // The jar once, the manifest once, and the module's .pom/.module once each for the mirror.
+        assertTrue(world.blossom.downloads.get() - before <= 4, "downloads: ${world.blossom.downloads.get() - before}")
+    }
+
+    @Test
+    fun headAndSha256AnswersDoNotDownloadTheFile() {
+        world.setUpPublisher(alice)
+        val repo = FakeMavenRepo(world.dir("repo")).publish("1.0.0")
+        world.publish(alice, repo.dir, "1.0.0")
+        world.stack(alice).use { stack ->
+            val path = "com/example/lib-jvm/1.0.0/lib-jvm-1.0.0.jar"
+            stack.get("com/example/lib-jvm/1.0.0/lib-jvm-1.0.0.pom") // fetches the manifest
+            val before = world.blossom.downloads.get()
+            val head = runBlocking { stack.router.handle(path, head = true) }
+            assertEquals(File(repo.dir, path).length(), (head as com.vitorpamplona.magpie.core.resolve.RouterResponse.Head).length)
+            assertEquals(
+                com.vitorpamplona.magpie.core.util.Hashing
+                    .sha256(File(repo.dir, path)),
+                stack.get("$path.sha256").text(),
+            )
+            assertEquals(before, world.blossom.downloads.get())
+            assertTrue("immutable" in head.headers.getValue("Cache-Control"))
+        }
+    }
+
+    @Test
+    fun floatingSnapshotNamesAreNotCachedForever() {
+        world.setUpPublisher(alice)
+        world.publish(alice, FakeMavenRepo(world.dir("snap")).publish("3.0-SNAPSHOT", snapshotStamp = "20261113.101010-1").dir, "3.0-SNAPSHOT")
+        world.stack(alice).use { stack ->
+            val floating = stack.get("com/example/lib-jvm/3.0-SNAPSHOT/lib-jvm-3.0-SNAPSHOT.jar")
+            assertEquals("no-cache", floating.headers["Cache-Control"])
+            val stamped = stack.get("com/example/lib-jvm/3.0-SNAPSHOT/lib-jvm-3.0-20261113.101010-1.jar")
+            assertTrue("immutable" in stamped.headers.getValue("Cache-Control"))
+        }
+    }
+
+    @Test
+    fun percentEncodedPathsResolve() {
+        world.setUpPublisher(alice)
+        world.publish(alice, FakeMavenRepo(world.dir("repo")).publish("1.0+build").dir, "1.0+build")
+        world.stack(alice).use { stack ->
+            assertEquals(200, stack.get("com/example/lib-jvm/1.0%2Bbuild/lib-jvm-1.0%2Bbuild.jar").status)
+            assertEquals(200, stack.get("com/example/lib-jvm/1.0+build/lib-jvm-1.0+build.jar").status)
+        }
+    }
+
+    @Test
+    fun oneProjectsLockDoesNotDecideForAnother() {
+        world.setUpPublisher(alice)
+        val first = FakeMavenRepo(world.dir("r1")).publish("1.0.0", content = "first")
+        world.publish(alice, first.dir, "1.0.0")
+        val later = FakeMavenRepo(world.dir("r2")).publish("1.0.0", content = "later")
+        val laterManifest = RepoScanner.scan(later.dir, "com.example", "1.0.0", "lib").manifest
+        later.dir
+            .walk()
+            .filter { it.isFile }
+            .forEach { world.blossom.put(it.readBytes()) }
+        world.blossom.put(laterManifest.toBytes())
+        world.relay.add(alice.sign(MagpieReleaseEvent.build(laterManifest, servers = listOf(world.blossom.url), createdAt = System.currentTimeMillis() / 1000 + 100)))
+
+        val cache = world.dir("shared-cache")
+        val pinsLater = File(world.root, "a.lock")
+        pinsLater.writeText(
+            com.vitorpamplona.magpie.spec
+                .LockFile()
+                .withRelease(
+                    com.vitorpamplona.magpie.spec
+                        .Coordinate("com.example", "lib-jvm", "1.0.0"),
+                    laterManifest.sha256Hex(),
+                ).render(),
+        )
+        val path = "com/example/lib-jvm/1.0.0/lib-jvm-1.0.0.jar"
+        world.stack(alice, cache = cache, lock = pinsLater).use { assertContentEquals(File(later.dir, path).readBytes(), it.get(path).bytes()) }
+        world.stack(alice, cache = cache, lock = File(world.root, "b.lock")).use {
+            assertContentEquals(File(first.dir, path).readBytes(), it.get(path).bytes(), "no lock: the earliest, not project A's pick")
+        }
+    }
+
+    @Test
+    fun siblingModulesOfAMultiplatformReleaseShareOneRelayQuery() {
+        world.setUpPublisher(alice)
+        world.publish(alice, FakeMavenRepo(world.dir("repo")).publish("1.0.0").dir, "1.0.0")
+        world.stack(alice).use { stack ->
+            stack.get("com/example/lib/1.0.0/lib-1.0.0.module").bytes()
+            val reqs = world.relay.reqCount.get()
+            stack.get("com/example/lib-jvm/1.0.0/lib-jvm-1.0.0.module").bytes()
+            stack.get("com/example/lib-linuxx64/1.0.0/lib-linuxx64-1.0.0.module").bytes()
+            assertEquals(reqs, world.relay.reqCount.get(), "no new release queries for sibling modules")
+        }
+        val lock =
+            com.vitorpamplona.magpie.spec.LockFile
+                .parse(File(world.root, "magpie.lock").readText())
+        assertTrue(
+            lock.releaseFor(
+                com.vitorpamplona.magpie.spec
+                    .Coordinate("com.example", "lib-jvm", "1.0.0"),
+            ) != null,
+            "siblings are recorded when used",
+        )
+    }
+
+    @Test
+    fun theLocalServerOnlyAnswersUnderItsPrefix() {
+        world.setUpPublisher(alice)
+        world.publish(alice, FakeMavenRepo(world.dir("repo")).publish("1.0.0").dir, "1.0.0")
+        world.stack(alice).use { stack ->
+            com.vitorpamplona.magpie.core.resolve
+                .LocalRepoServer(stack.router, world.log, 0, "abc123")
+                .use { server ->
+                    val http = Http.client()
+
+                    fun status(url: String) =
+                        http
+                            .newCall(
+                                okhttp3.Request
+                                    .Builder()
+                                    .url(url)
+                                    .build(),
+                            ).execute()
+                            .use { it.code }
+                    assertEquals(200, status(server.url + "com/example/lib/1.0.0/lib-1.0.0.pom"))
+                    assertEquals(404, status("http://127.0.0.1:${server.port}/com/example/lib/1.0.0/lib-1.0.0.pom"))
+                }
+        }
     }
 }

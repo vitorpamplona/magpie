@@ -30,6 +30,7 @@ import com.vitorpamplona.magpie.core.util.MagpieLog
 import io.ktor.http.ContentType
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.content.OutgoingContent
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.cio.CIO
@@ -155,21 +156,39 @@ private suspend fun serve(
         call.respond(HttpStatusCode.MethodNotAllowed)
         return
     }
-    val response = router.handle(call.request.path())
+    val head = method == HttpMethod.Head
+    val response = router.handle(call.request.path(), head)
     response.headers.forEach { (k, v) -> call.response.header(k, v) }
+    if (head) {
+        // Headers only: a HEAD that wrote a body would corrupt keep-alive connections.
+        val length =
+            when (response) {
+                is RouterResponse.Head -> response.length
+                is RouterResponse.Bytes -> response.bytes.size.toLong()
+                is RouterResponse.FileBody -> response.file.length()
+                is RouterResponse.Error -> null
+            }
+        val type =
+            when (response) {
+                is RouterResponse.Head -> response.contentType
+                is RouterResponse.Bytes -> response.contentType
+                is RouterResponse.FileBody -> response.contentType
+                is RouterResponse.Error -> "text/plain"
+            }
+        call.respond(
+            object : OutgoingContent.NoContent() {
+                override val status: HttpStatusCode = HttpStatusCode.fromValue(response.status)
+                override val contentLength: Long? = length
+                override val contentType: ContentType = ContentType.parse(type)
+            },
+        )
+        return
+    }
     when (response) {
-        is RouterResponse.Error -> {
-            call.respondText(response.message, status = HttpStatusCode.fromValue(response.status))
-        }
-
-        is RouterResponse.Bytes -> {
-            call.respondBytes(response.bytes, ContentType.parse(response.contentType))
-        }
-
-        is RouterResponse.FileBody -> {
-            call.response.header("Cache-Control", "public, max-age=31536000, immutable")
-            call.respond(LocalFileContent(response.file, ContentType.parse(response.contentType)))
-        }
+        is RouterResponse.Error -> call.respondText(response.message, status = HttpStatusCode.fromValue(response.status))
+        is RouterResponse.Bytes -> call.respondBytes(response.bytes, ContentType.parse(response.contentType))
+        is RouterResponse.FileBody -> call.respond(LocalFileContent(response.file, ContentType.parse(response.contentType)))
+        is RouterResponse.Head -> call.respond(HttpStatusCode.InternalServerError)
     }
 }
 

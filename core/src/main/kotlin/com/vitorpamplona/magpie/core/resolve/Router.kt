@@ -21,6 +21,7 @@
 package com.vitorpamplona.magpie.core.resolve
 
 import com.vitorpamplona.magpie.core.util.Clock
+import com.vitorpamplona.magpie.core.util.ExpiringCache
 import com.vitorpamplona.magpie.core.util.Files2
 import com.vitorpamplona.magpie.core.util.MagpieLog
 import com.vitorpamplona.magpie.spec.ChecksumAlgorithm
@@ -29,8 +30,8 @@ import com.vitorpamplona.magpie.spec.MavenPath
 import com.vitorpamplona.magpie.spec.toPath
 import com.vitorpamplona.quartz.nip01Core.core.HexKey
 import java.io.File
+import java.net.URI
 import java.nio.file.Files
-import java.util.concurrent.ConcurrentHashMap
 
 /** What the router answers; transports (JDK HttpServer, Ktor) turn it into HTTP. */
 public sealed interface RouterResponse {
@@ -57,6 +58,15 @@ public sealed interface RouterResponse {
         override fun hashCode(): Int = bytes.contentHashCode()
     }
 
+    /** A HEAD answer: the length and headers of a file, without fetching it. */
+    public data class Head(
+        val length: Long,
+        val contentType: String,
+        override val headers: Map<String, String> = emptyMap(),
+    ) : RouterResponse {
+        override val status: Int get() = 200
+    }
+
     public data class Error(
         override val status: Int,
         val message: String,
@@ -78,17 +88,21 @@ public class Router(
     private val mirror: RepositoryMirror? = null,
     private val clock: Clock = Clock.SYSTEM,
 ) {
-    private val notFound = ConcurrentHashMap<String, Long>()
+    private val notFound = ExpiringCache<String, Unit>(10_000, clock)
 
-    public suspend fun handle(rawPath: String): RouterResponse {
-        val path = rawPath.substringBefore('?').trimStart('/')
-        notFound[path]?.let { until ->
-            if (until > clock.nowMillis()) return RouterResponse.Error(404, "Not found (cached miss)")
-            notFound.remove(path, until)
-        }
+    /**
+     * [rawPath] as the transport received it (percent-encoded). With [head], files are answered
+     * from the manifest (length, type) without downloading them.
+     */
+    public suspend fun handle(
+        rawPath: String,
+        head: Boolean = false,
+    ): RouterResponse {
+        val path = decode(rawPath.substringBefore('?')).trimStart('/')
+        if (notFound.contains(path)) return RouterResponse.Error(404, "Not found (cached miss)")
         val response =
             try {
-                route(path)
+                route(path, head)
             } catch (e: MagpieSecurityException) {
                 log.error("Magpie refused $path: ${e.message}")
                 RouterResponse.Error(500, e.message ?: "refused")
@@ -101,13 +115,17 @@ public class Router(
                 log.warn("Magpie failed on $path: ${e.message}")
                 RouterResponse.Error(502, e.message ?: e.javaClass.simpleName)
             }
-        if (response is RouterResponse.Error && response.status == 404) {
-            notFound[path] = clock.nowMillis() + resolver.settings.negativeTtlMs
-        }
+        if (response is RouterResponse.Error && response.status == 404) notFound.put(path, Unit, resolver.settings.negativeTtlMs)
         return response
     }
 
-    private suspend fun route(path: String): RouterResponse {
+    /** Percent-decodes [raw] (`%2B` -> `+`), leaving `+` itself alone; garbage decodes to nothing. */
+    private fun decode(raw: String): String = runCatching { URI("http://h/" + raw.trimStart('/')).path }.getOrNull() ?: ""
+
+    private suspend fun route(
+        path: String,
+        head: Boolean,
+    ): RouterResponse {
         val parsed = MavenPath.parse(path) ?: return RouterResponse.Error(404, "Not a Maven path")
         val group =
             when (parsed) {
@@ -119,7 +137,7 @@ public class Router(
         return when (parsed) {
             is MavenPath.ArtifactMetadata -> artifactMetadata(parsed, publisher.pubKey)
             is MavenPath.VersionMetadata -> versionMetadata(parsed, publisher.pubKey)
-            is MavenPath.ArtifactFile -> file(parsed, publisher.pubKey)
+            is MavenPath.ArtifactFile -> file(parsed, publisher.pubKey, head)
         }
     }
 
@@ -146,6 +164,7 @@ public class Router(
     private suspend fun file(
         path: MavenPath.ArtifactFile,
         publisher: HexKey,
+        head: Boolean,
     ): RouterResponse {
         val coordinate = path.coordinate
         val publication =
@@ -158,10 +177,23 @@ public class Router(
         val manifest = resolver.manifest(publication)
         val key = resolveKey(manifest, path) ?: return RouterResponse.Error(404, "${path.fileName} is not part of $coordinate")
         val entry = manifest[key]!!
-        val blob = resolver.blob(entry.sha256, entry.size, publication)
-        val headers = mapOf("X-Magpie-Event" to publication.id, "X-Checksum-Sha256" to entry.sha256)
+        // A release's files, and a snapshot's timestamped ones, never change; a floating
+        // -SNAPSHOT name points at whatever build is newest.
+        val immutable = !coordinate.isSnapshot || key == path.manifestKey
+        val headers =
+            mapOf(
+                "X-Magpie-Event" to publication.id,
+                "X-Checksum-Sha256" to entry.sha256,
+                "Cache-Control" to if (immutable) "public, max-age=31536000, immutable" else "no-cache",
+            )
 
         val checksum = path.checksum
+        if (checksum == ChecksumAlgorithm.SHA256) {
+            // Known from the manifest: no need for the blob.
+            return RouterResponse.Bytes(entry.sha256.toByteArray(), "text/plain", headers)
+        }
+        if (head && checksum == null) return RouterResponse.Head(entry.size, contentTypeOf(path.fileName), headers)
+        val blob = resolver.blob(entry.sha256, entry.size, publication)
         if (checksum != null) {
             val value = checksums.ofBlob(entry.sha256, blob, checksum)
             return RouterResponse.Bytes(value.toByteArray(), "text/plain", headers)
@@ -219,9 +251,10 @@ public class Router(
         publisher: HexKey,
     ): RouterResponse {
         val checksum = path.checksum
-        if (checksum != null) return RouterResponse.Bytes(checksums.ofBytes(body, checksum).toByteArray(), "text/plain")
+        val headers = mapOf("Cache-Control" to "public, max-age=30")
+        if (checksum != null) return RouterResponse.Bytes(checksums.ofBytes(body, checksum).toByteArray(), "text/plain", headers)
         mirror?.writeFile(publisher, path.toPath(), body)
-        return RouterResponse.Bytes(body, contentType)
+        return RouterResponse.Bytes(body, contentType, headers)
     }
 
     public companion object {
