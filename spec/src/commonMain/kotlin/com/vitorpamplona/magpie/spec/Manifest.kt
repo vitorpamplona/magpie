@@ -65,7 +65,6 @@ public data class Manifest(
         }
     }
 
-    /** The Maven modules (artifactIds) of this release: the root first, then every other one with files, sorted. */
     // Indexed once: the router asks for one artifact's files on every request.
     private val byArtifact: Map<String, Map<String, ManifestFile>> by lazy {
         files.entries.groupBy({ it.key.substringBefore('/') }, { it.key.substringAfterLast('/') to it.value }).mapValues { it.value.toMap() }
