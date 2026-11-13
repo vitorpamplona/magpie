@@ -5,7 +5,10 @@ plugins {
 kotlin {
     explicitApi()
     jvmToolchain(21)
-    jvm()
+    jvm {
+        // Gradle 8 daemons may run on Java 17.
+        compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) }
+    }
 
     sourceSets {
         commonMain.dependencies {

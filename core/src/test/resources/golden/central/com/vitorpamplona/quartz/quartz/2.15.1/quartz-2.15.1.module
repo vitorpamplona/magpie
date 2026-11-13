@@ -1,0 +1,430 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "com.vitorpamplona.quartz",
+    "module": "quartz",
+    "version": "2.15.1",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.8.2"
+    }
+  },
+  "variants": [
+    {
+      "name": "metadataApiElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-metadata",
+        "org.jetbrains.kotlin.platform.type": "common"
+      },
+      "dependencies": [
+        {
+          "group": "fr.acinq.secp256k1",
+          "module": "secp256k1-kmp",
+          "version": {
+            "requires": "0.24.0"
+          }
+        },
+        {
+          "group": "androidx.sqlite",
+          "module": "sqlite",
+          "version": {
+            "requires": "2.7.1"
+          }
+        },
+        {
+          "group": "com.vitorpamplona.negentropy",
+          "module": "kmp-negentropy",
+          "version": {
+            "requires": "v1.2.1"
+          }
+        },
+        {
+          "group": "com.vitorpamplona.crypto",
+          "module": "crypto",
+          "version": {
+            "requires": "2.1.0"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.4.21"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlinx",
+          "module": "kotlinx-coroutines-core",
+          "version": {
+            "requires": "1.11.0"
+          }
+        },
+        {
+          "group": "androidx.collection",
+          "module": "collection",
+          "version": {
+            "requires": "1.7.0"
+          }
+        },
+        {
+          "group": "androidx.compose.runtime",
+          "module": "runtime-annotation",
+          "version": {
+            "requires": "1.12.1"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlinx",
+          "module": "kotlinx-serialization-json",
+          "version": {
+            "requires": "1.12.0"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlinx",
+          "module": "kotlinx-serialization-cbor",
+          "version": {
+            "requires": "1.12.0"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlinx",
+          "module": "kotlinx-collections-immutable",
+          "version": {
+            "requires": "0.5.2"
+          }
+        },
+        {
+          "group": "androidx.sqlite",
+          "module": "sqlite-bundled",
+          "version": {
+            "requires": "2.7.1"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "quartz-metadata.jar",
+          "url": "quartz-2.15.1.jar",
+          "size": 2686160,
+          "sha512": "128e5c04cf6947da113b79299d27b335e8d25b3f1fc830ff1989eed7f3246e5ca5c093ae91e2c138ee291cf7f616c544d3e7130d79f99649f01e2abee4ece3da",
+          "sha256": "81b351f39c02ab922b467b877682257e09b9fceaf250c29f67828a7b28e4e200",
+          "sha1": "a8782b9b7b64363b037e53bfffa3c52251d1caa0",
+          "md5": "e9caa63f8be1d6097c3350b6a395c43f"
+        }
+      ]
+    },
+    {
+      "name": "metadataSourcesElements",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-runtime",
+        "org.jetbrains.kotlin.platform.type": "common"
+      },
+      "files": [
+        {
+          "name": "quartz-kotlin-sources.jar",
+          "url": "quartz-2.15.1-sources.jar",
+          "size": 5867611,
+          "sha512": "07633ba042afa34e8971bb1dea0ca69190639b7ecd744bc27e9d87beedf6fed7685afb1490f55062fdb0c31ce7f29c4a3883c38da3c6d71b3976f5155e6da206",
+          "sha256": "c27b90f3fde5e8735518fd44598545a537e74b713cd0f0fa2a052486aba0c62b",
+          "sha1": "111b8ed5e521d2bd434fdb23f53f8e10d068eff2",
+          "md5": "50089d2910ec10dffea13f4e30ad0b5c"
+        }
+      ]
+    },
+    {
+      "name": "androidApiElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "android",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-api",
+        "org.jetbrains.kotlin.platform.type": "androidJvm"
+      },
+      "available-at": {
+        "url": "../../quartz-android/2.15.1/quartz-android-2.15.1.module",
+        "group": "com.vitorpamplona.quartz",
+        "module": "quartz-android",
+        "version": "2.15.1"
+      }
+    },
+    {
+      "name": "androidRuntimeElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "android",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-runtime",
+        "org.jetbrains.kotlin.platform.type": "androidJvm"
+      },
+      "available-at": {
+        "url": "../../quartz-android/2.15.1/quartz-android-2.15.1.module",
+        "group": "com.vitorpamplona.quartz",
+        "module": "quartz-android",
+        "version": "2.15.1"
+      }
+    },
+    {
+      "name": "androidSourcesElements-published",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.jvm.environment": "android",
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime",
+        "org.jetbrains.kotlin.platform.type": "androidJvm"
+      },
+      "available-at": {
+        "url": "../../quartz-android/2.15.1/quartz-android-2.15.1.module",
+        "group": "com.vitorpamplona.quartz",
+        "module": "quartz-android",
+        "version": "2.15.1"
+      }
+    },
+    {
+      "name": "iosArm64ApiElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-api",
+        "org.jetbrains.kotlin.native.target": "ios_arm64",
+        "org.jetbrains.kotlin.platform.type": "native"
+      },
+      "available-at": {
+        "url": "../../quartz-iosarm64/2.15.1/quartz-iosarm64-2.15.1.module",
+        "group": "com.vitorpamplona.quartz",
+        "module": "quartz-iosarm64",
+        "version": "2.15.1"
+      }
+    },
+    {
+      "name": "iosArm64SourcesElements-published",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-runtime",
+        "org.jetbrains.kotlin.native.target": "ios_arm64",
+        "org.jetbrains.kotlin.platform.type": "native"
+      },
+      "available-at": {
+        "url": "../../quartz-iosarm64/2.15.1/quartz-iosarm64-2.15.1.module",
+        "group": "com.vitorpamplona.quartz",
+        "module": "quartz-iosarm64",
+        "version": "2.15.1"
+      }
+    },
+    {
+      "name": "iosArm64MetadataElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-metadata",
+        "org.jetbrains.kotlin.native.target": "ios_arm64",
+        "org.jetbrains.kotlin.platform.type": "native"
+      },
+      "available-at": {
+        "url": "../../quartz-iosarm64/2.15.1/quartz-iosarm64-2.15.1.module",
+        "group": "com.vitorpamplona.quartz",
+        "module": "quartz-iosarm64",
+        "version": "2.15.1"
+      }
+    },
+    {
+      "name": "iosSimulatorArm64ApiElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-api",
+        "org.jetbrains.kotlin.native.target": "ios_simulator_arm64",
+        "org.jetbrains.kotlin.platform.type": "native"
+      },
+      "available-at": {
+        "url": "../../quartz-iossimulatorarm64/2.15.1/quartz-iossimulatorarm64-2.15.1.module",
+        "group": "com.vitorpamplona.quartz",
+        "module": "quartz-iossimulatorarm64",
+        "version": "2.15.1"
+      }
+    },
+    {
+      "name": "iosSimulatorArm64SourcesElements-published",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-runtime",
+        "org.jetbrains.kotlin.native.target": "ios_simulator_arm64",
+        "org.jetbrains.kotlin.platform.type": "native"
+      },
+      "available-at": {
+        "url": "../../quartz-iossimulatorarm64/2.15.1/quartz-iossimulatorarm64-2.15.1.module",
+        "group": "com.vitorpamplona.quartz",
+        "module": "quartz-iossimulatorarm64",
+        "version": "2.15.1"
+      }
+    },
+    {
+      "name": "iosSimulatorArm64MetadataElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-metadata",
+        "org.jetbrains.kotlin.native.target": "ios_simulator_arm64",
+        "org.jetbrains.kotlin.platform.type": "native"
+      },
+      "available-at": {
+        "url": "../../quartz-iossimulatorarm64/2.15.1/quartz-iossimulatorarm64-2.15.1.module",
+        "group": "com.vitorpamplona.quartz",
+        "module": "quartz-iossimulatorarm64",
+        "version": "2.15.1"
+      }
+    },
+    {
+      "name": "jvmApiElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-api",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "available-at": {
+        "url": "../../quartz-jvm/2.15.1/quartz-jvm-2.15.1.module",
+        "group": "com.vitorpamplona.quartz",
+        "module": "quartz-jvm",
+        "version": "2.15.1"
+      }
+    },
+    {
+      "name": "jvmRuntimeElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "available-at": {
+        "url": "../../quartz-jvm/2.15.1/quartz-jvm-2.15.1.module",
+        "group": "com.vitorpamplona.quartz",
+        "module": "quartz-jvm",
+        "version": "2.15.1"
+      }
+    },
+    {
+      "name": "jvmSourcesElements-published",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "available-at": {
+        "url": "../../quartz-jvm/2.15.1/quartz-jvm-2.15.1.module",
+        "group": "com.vitorpamplona.quartz",
+        "module": "quartz-jvm",
+        "version": "2.15.1"
+      }
+    },
+    {
+      "name": "linuxX64ApiElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-api",
+        "org.jetbrains.kotlin.native.target": "linux_x64",
+        "org.jetbrains.kotlin.platform.type": "native"
+      },
+      "available-at": {
+        "url": "../../quartz-linuxx64/2.15.1/quartz-linuxx64-2.15.1.module",
+        "group": "com.vitorpamplona.quartz",
+        "module": "quartz-linuxx64",
+        "version": "2.15.1"
+      }
+    },
+    {
+      "name": "linuxX64SourcesElements-published",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-runtime",
+        "org.jetbrains.kotlin.native.target": "linux_x64",
+        "org.jetbrains.kotlin.platform.type": "native"
+      },
+      "available-at": {
+        "url": "../../quartz-linuxx64/2.15.1/quartz-linuxx64-2.15.1.module",
+        "group": "com.vitorpamplona.quartz",
+        "module": "quartz-linuxx64",
+        "version": "2.15.1"
+      }
+    },
+    {
+      "name": "macosArm64ApiElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-api",
+        "org.jetbrains.kotlin.native.target": "macos_arm64",
+        "org.jetbrains.kotlin.platform.type": "native"
+      },
+      "available-at": {
+        "url": "../../quartz-macosarm64/2.15.1/quartz-macosarm64-2.15.1.module",
+        "group": "com.vitorpamplona.quartz",
+        "module": "quartz-macosarm64",
+        "version": "2.15.1"
+      }
+    },
+    {
+      "name": "macosArm64SourcesElements-published",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-runtime",
+        "org.jetbrains.kotlin.native.target": "macos_arm64",
+        "org.jetbrains.kotlin.platform.type": "native"
+      },
+      "available-at": {
+        "url": "../../quartz-macosarm64/2.15.1/quartz-macosarm64-2.15.1.module",
+        "group": "com.vitorpamplona.quartz",
+        "module": "quartz-macosarm64",
+        "version": "2.15.1"
+      }
+    },
+    {
+      "name": "macosArm64MetadataElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-metadata",
+        "org.jetbrains.kotlin.native.target": "macos_arm64",
+        "org.jetbrains.kotlin.platform.type": "native"
+      },
+      "available-at": {
+        "url": "../../quartz-macosarm64/2.15.1/quartz-macosarm64-2.15.1.module",
+        "group": "com.vitorpamplona.quartz",
+        "module": "quartz-macosarm64",
+        "version": "2.15.1"
+      }
+    }
+  ]
+}
