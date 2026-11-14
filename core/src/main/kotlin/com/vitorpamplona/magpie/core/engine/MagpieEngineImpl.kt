@@ -27,6 +27,7 @@ import com.vitorpamplona.magpie.bridge.ResolverHandle
 import com.vitorpamplona.magpie.core.nostr.QuartzNostrIO
 import com.vitorpamplona.magpie.core.publish.BlossomClient
 import com.vitorpamplona.magpie.core.publish.BunkerSigner
+import com.vitorpamplona.magpie.core.publish.ListSettings
 import com.vitorpamplona.magpie.core.publish.MagpieSigner
 import com.vitorpamplona.magpie.core.publish.PublishSettings
 import com.vitorpamplona.magpie.core.publish.Publisher
@@ -80,11 +81,7 @@ public class MagpieEngineImpl : MagpieEngine {
             "Magpie repository at ${server.url} (${if (stack.offline) {
                 "offline"
             } else {
-                "relays: " +
-                    config
-                        .list(
-                            EngineConfig.RELAYS,
-                        ).joinToString()
+                "index relays: " + config.list(EngineConfig.INDEX_RELAYS).joinToString().ifEmpty { "none; using the relays domains list" }
             }
             })",
         )
@@ -126,7 +123,7 @@ public class MagpieEngineImpl : MagpieEngine {
                                     group = config.getValue(EngineConfig.GROUP),
                                     version = config.getValue(EngineConfig.VERSION),
                                     rootArtifact = config[EngineConfig.ARTIFACT]?.takeIf { it.isNotBlank() },
-                                    indexerRelays = config.list(EngineConfig.INDEXER_RELAYS),
+                                    indexRelays = config.list(EngineConfig.INDEX_RELAYS),
                                     publishRelays = config.list(EngineConfig.PUBLISH_RELAYS),
                                     partial = config.flag(EngineConfig.PARTIAL),
                                     partialDir = config[EngineConfig.PARTIAL_DIR]?.takeIf { it.isNotBlank() }?.let(::File),
@@ -146,8 +143,12 @@ public class MagpieEngineImpl : MagpieEngine {
                         }
 
                         EngineConfig.TASK_CREATE_SERVER_LIST -> {
-                            val relays = (config.list(EngineConfig.PUBLISH_RELAYS) + config.list(EngineConfig.INDEXER_RELAYS)).distinct()
-                            val event = publisher.createServerList(config.list(EngineConfig.SERVERS), relays)
+                            val event = publisher.createServerList(config.list(EngineConfig.SERVERS), listSettings(config))
+                            mapOf("event" to event.id)
+                        }
+
+                        EngineConfig.TASK_CREATE_RELAY_LIST -> {
+                            val event = publisher.createRelayList(config.list(EngineConfig.LIST_RELAYS), listSettings(config))
                             mapOf("event" to event.id)
                         }
 
@@ -163,6 +164,13 @@ public class MagpieEngineImpl : MagpieEngine {
             http.connectionPool.evictAll()
         }
     }
+
+    private fun listSettings(config: Map<String, String>): ListSettings =
+        ListSettings(
+            group = config[EngineConfig.GROUP]?.takeIf { it.isNotBlank() },
+            indexRelays = config.list(EngineConfig.INDEX_RELAYS),
+            publishRelays = config.list(EngineConfig.PUBLISH_RELAYS),
+        )
 
     private fun signerFor(
         config: Map<String, String>,

@@ -158,6 +158,8 @@ public class TrustPolicy(
     private val clock: Clock = Clock.SYSTEM,
     /** How long a failed lookup is remembered, so parallel requests don't each repeat it. */
     private val failureTtlMs: Long = 30_000,
+    /** Receives the relays a vouching domain lists for its key: where that key's events are. */
+    private val relayHints: RelayHints? = null,
 ) {
     private val verified = ConcurrentHashMap<String, HexKey>()
     private val failures = ExpiringCache<String, MagpieSecurityException>(1_000, clock)
@@ -252,6 +254,7 @@ public class TrustPolicy(
                                 lock.update { it.withPublisher(rule.group, LockedPublisher(answer.pubKey, "nip05:${answer.identifier}")) }
                             }
                         }
+                        relayHints?.put(answer.pubKey, answer.relays)
                         answer.pubKey
                     }
 

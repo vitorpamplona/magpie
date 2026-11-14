@@ -29,6 +29,7 @@ import com.vitorpamplona.magpie.core.resolve.ChecksumFiles
 import com.vitorpamplona.magpie.core.resolve.GroupRule
 import com.vitorpamplona.magpie.core.resolve.HttpNip05Resolver
 import com.vitorpamplona.magpie.core.resolve.LockStore
+import com.vitorpamplona.magpie.core.resolve.RelayHints
 import com.vitorpamplona.magpie.core.resolve.RelayQuery
 import com.vitorpamplona.magpie.core.resolve.RepositoryMirror
 import com.vitorpamplona.magpie.core.resolve.Resolver
@@ -86,7 +87,7 @@ public class ResolverStack(
             val offline = config.flag(EngineConfig.OFFLINE)
             val cacheDir = File(config[EngineConfig.CACHE_DIR] ?: File(System.getProperty("user.home"), ".gradle/magpie").path)
             val http = Http.client()
-            val relays = config.list(EngineConfig.RELAYS)
+            val indexRelays = config.list(EngineConfig.INDEX_RELAYS)
             val nostr =
                 if (offline) {
                     null
@@ -96,7 +97,7 @@ public class ResolverStack(
                 }
             val settings =
                 ResolverSettings(
-                    relays = relays,
+                    indexRelays = indexRelays,
                     fallbackServers = config.list(EngineConfig.FALLBACK_SERVERS),
                     cacheDir = cacheDir,
                     offline = offline,
@@ -109,9 +110,10 @@ public class ResolverStack(
                     log,
                 )
             val nip05 = HttpNip05Resolver(http, config[NIP05_BASE_URL]?.takeIf { it.isNotBlank() })
-            val trust = TrustPolicy(config.list(EngineConfig.GROUPS).map { GroupRule.parse(it) }, lock, nip05, offline, log)
+            val hints = RelayHints(File(cacheDir, "nip05-relays"))
+            val trust = TrustPolicy(config.list(EngineConfig.GROUPS).map { GroupRule.parse(it) }, lock, nip05, offline, log, relayHints = hints)
             val store = BlobStore(File(cacheDir, "blobs"))
-            val resolver = Resolver(settings, trust, RelayQuery(nostr, relays, cacheDir, log), BlobFetcher(http, store, log), log)
+            val resolver = Resolver(settings, trust, RelayQuery(nostr, indexRelays, cacheDir, log, hints), BlobFetcher(http, store, log), log)
             val mirror = RepositoryMirror(File(cacheDir, "mirror"))
             val useMirror = config[MIRROR]?.toBoolean() ?: true
             val router = Router(resolver, ChecksumFiles(File(cacheDir, "checksums")), log, mirror.takeIf { useMirror })

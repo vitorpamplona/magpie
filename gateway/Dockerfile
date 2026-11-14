@@ -2,7 +2,7 @@
 # Magpie gateway: the resolver as an HTTP Maven repository.
 #   docker build -f gateway/Dockerfile -t magpie-gateway .
 #   docker run -p 8080:8080 -v magpie-cache:/var/cache/magpie \
-#     -e MAGPIE_RELAYS=wss://relay.example.com \
+#     -e MAGPIE_INDEX_RELAYS=wss://purplepag.es \
 #     -e MAGPIE_TRUST=com.example=npub1... \
 #     magpie-gateway
 FROM eclipse-temurin:21-jdk AS build

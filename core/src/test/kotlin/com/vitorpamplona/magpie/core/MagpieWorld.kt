@@ -86,7 +86,7 @@ class MagpieWorld : AutoCloseable {
                     group = "com.example",
                     version = version,
                     rootArtifact = "lib",
-                    indexerRelays = listOf(relay.url),
+                    indexRelays = listOf(relay.url),
                 ).configure(),
             )
         }
@@ -102,7 +102,7 @@ class MagpieWorld : AutoCloseable {
     ): ResolverStack =
         ResolverStack.create(
             mapOf(
-                EngineConfig.RELAYS to relay.url,
+                EngineConfig.INDEX_RELAYS to relay.url,
                 EngineConfig.GROUPS to "com.example=$pin",
                 EngineConfig.CACHE_DIR to cache.path,
                 EngineConfig.LOCK_FILE to (lock?.path ?: ""),

@@ -62,7 +62,8 @@ public class QueryResult(
 /** No relay answered a query: absence is unknown, not proven. */
 public class RelaysUnavailableException(
     asked: Collection<String>,
-) : IOException("None of the relays answered (${asked.joinToString().ifEmpty { "none configured" }})")
+    detail: String? = null,
+) : IOException(detail ?: "None of the relays answered (${asked.joinToString().ifEmpty { "none configured" }})")
 
 /** What Magpie needs from relays: read events (verified) and publish them. */
 public interface NostrIO : AutoCloseable {

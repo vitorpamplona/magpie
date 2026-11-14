@@ -37,6 +37,8 @@ import java.net.UnknownHostException
 public sealed interface Nip05Answer {
     public data class Key(
         val pubKey: HexKey,
+        /** The relays `nostr.json` lists for the key: where its events can be found. */
+        val relays: List<String> = emptyList(),
     ) : Nip05Answer
 
     /** Definitely no key: the domain doesn't exist, has no `nostr.json` (404), or doesn't list the name. */
@@ -95,16 +97,16 @@ public class HttpNip05Resolver(
                         else -> {
                             val bytes = response.body.byteStream().use { it.readNBytes(MAX_BODY + 1) }
                             if (bytes.size > MAX_BODY) return@use Nip05Answer.Unreachable("nostr.json at $url is larger than ${MAX_BODY / 1024} KB")
-                            val names =
+                            val info =
                                 try {
-                                    Nip05Parser().parse(bytes.decodeToString()).names
+                                    Nip05Parser().parse(bytes.decodeToString())
                                 } catch (e: Exception) {
                                     return@use Nip05Answer.Unreachable("unreadable nostr.json at $url")
                                 }
-                            names[id.name]
+                            info.names[id.name]
                                 ?.lowercase()
                                 ?.takeIf { it.length == 64 && it.all { c -> c in '0'..'9' || c in 'a'..'f' } }
-                                ?.let { Nip05Answer.Key(it) }
+                                ?.let { key -> Nip05Answer.Key(key, RelayUrls.clean(info.relays[key].orEmpty())) }
                                 ?: Nip05Answer.Absent
                         }
                     }
@@ -136,6 +138,8 @@ public sealed interface VouchedKey {
     public data class Found(
         val identifier: String,
         val pubKey: HexKey,
+        /** The relays the domain lists for the key. */
+        val relays: List<String> = emptyList(),
     ) : VouchedKey
 
     /** Every candidate definitely has no key. */
@@ -154,7 +158,7 @@ public sealed interface VouchedKey {
 public suspend fun Nip05Resolver.vouch(identifiers: List<String>): VouchedKey {
     for (identifier in identifiers) {
         when (val answer = lookup(identifier)) {
-            is Nip05Answer.Key -> return VouchedKey.Found(identifier, answer.pubKey)
+            is Nip05Answer.Key -> return VouchedKey.Found(identifier, answer.pubKey, answer.relays)
             Nip05Answer.Absent -> continue
             is Nip05Answer.Unreachable -> return VouchedKey.Undecided(identifier, answer.reason)
         }

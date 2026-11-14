@@ -23,6 +23,7 @@ package com.vitorpamplona.magpie.core.publish
 import com.vitorpamplona.magpie.core.nostr.NostrIO
 import com.vitorpamplona.magpie.core.resolve.BlobFetcher
 import com.vitorpamplona.magpie.core.resolve.BlobStore
+import com.vitorpamplona.magpie.core.resolve.RelayUrls
 import com.vitorpamplona.magpie.core.util.Clock
 import com.vitorpamplona.magpie.core.util.Files2
 import com.vitorpamplona.magpie.core.util.MagpieLog
@@ -59,9 +60,9 @@ public data class PublishSettings(
     val version: String,
     /** Root artifactId; guessed (the shortest) when null. */
     val rootArtifact: String? = null,
-    /** Where to read the publisher's kind 10063 and 10002. */
-    val indexerRelays: List<String>,
-    /** Archival relays that get every release besides the publisher's NIP-65 write relays. */
+    /** Where to look the publisher's relay list (kind 10002) up, besides its domain's relays. */
+    val indexRelays: List<String>,
+    /** Archival relays that get every release besides the publisher's own relays. */
     val publishRelays: List<String> = emptyList(),
     /** `--partial`: upload this host's blobs and write a partial manifest; sign no release. */
     val partial: Boolean = false,
@@ -80,11 +81,23 @@ public data class PublishResult(
     val partialManifest: File? = null,
 )
 
-/** The publisher's Blossom servers (kind 10063) and NIP-65 write relays. */
+/** The publisher's Blossom servers (kind 10063), NIP-65 write relays, and the relays its domain lists for it. */
 public data class PublisherContext(
     val pubKey: HexKey,
     val servers: List<String>,
     val writeRelays: List<String>,
+    val domainRelays: List<String> = emptyList(),
+) {
+    /** Where consumers read this key's events: its write relays and its domain's relays. */
+    val homeRelays: List<String> get() = (writeRelays + domainRelays).distinct()
+}
+
+/** What the list tasks (server list, relay list) need. */
+public data class ListSettings(
+    /** The group whose domain may list relays for the key; null skips that lookup. */
+    val group: String?,
+    val indexRelays: List<String>,
+    val publishRelays: List<String> = emptyList(),
 )
 
 public class MissingServerListException(
@@ -143,19 +156,17 @@ public class Publisher(
             event
         }
 
-    public suspend fun context(indexerRelays: List<String>): PublisherContext {
+    /**
+     * Reads the signer's relay list (kind 10002) and server list (kind 10063) the way consumers
+     * find them: on the index relays and the domain's relays first, then on the write relays the
+     * relay list names.
+     */
+    public suspend fun context(
+        indexRelays: List<String>,
+        domainRelays: List<String> = emptyList(),
+    ): PublisherContext {
         val pubKey = signer.pubKey()
-        val result =
-            nostr.query(
-                indexerRelays,
-                listOf(Filter(kinds = listOf(MagpieSpec.KIND_BLOSSOM_SERVERS, MagpieSpec.KIND_RELAY_LIST), authors = listOf(pubKey))),
-            )
-        if (!result.anyAnswered) {
-            throw IllegalStateException("None of the relays (${indexerRelays.joinToString()}) answered, so your server and relay lists can't be read. Nothing was signed.")
-        }
-        val events = result.events
-        val serverList = events.filter { it.kind == MagpieSpec.KIND_BLOSSOM_SERVERS && it.pubKey == pubKey }.maxByOrNull { it.createdAt }
-        val relayList = events.filter { it.kind == MagpieSpec.KIND_RELAY_LIST && it.pubKey == pubKey }.maxByOrNull { it.createdAt }
+        val (serverList, relayList) = readLists(pubKey, indexRelays, domainRelays)
         val servers =
             serverList
                 ?.tags
@@ -165,13 +176,73 @@ public class Publisher(
                 ?.distinct()
                 .orEmpty()
         if (servers.isEmpty()) throw MissingServerListException(PublicKeys.npub(pubKey))
-        val writeRelays =
-            relayList
-                ?.tags
-                ?.filter { it.size >= 2 && it[0] == "r" && (it.size == 2 || it[2] == "write") }
-                ?.map { it[1] }
-                .orEmpty()
-        return PublisherContext(pubKey, servers, writeRelays)
+        return PublisherContext(pubKey, servers, RelayUrls.writeRelays(relayList), RelayUrls.clean(domainRelays))
+    }
+
+    /** The newest server list and relay list of [pubKey], or null for the ones no relay has. */
+    private suspend fun readLists(
+        pubKey: HexKey,
+        indexRelays: List<String>,
+        domainRelays: List<String>,
+    ): Pair<Event?, Event?> {
+        val first = (RelayUrls.clean(indexRelays, max = Int.MAX_VALUE) + RelayUrls.clean(domainRelays)).distinct()
+        if (first.isEmpty()) {
+            throw IllegalStateException(
+                "No relays to read your relay and server lists from: set magpie { indexRelays(\"wss://…\") } (or -Pmagpie.indexRelays=…), " +
+                    "or list relays for your key in your domain's nostr.json. Nothing was signed.",
+            )
+        }
+        val filter = listOf(Filter(kinds = listOf(MagpieSpec.KIND_BLOSSOM_SERVERS, MagpieSpec.KIND_RELAY_LIST), authors = listOf(pubKey)))
+        val result = nostr.query(first, filter)
+        if (!result.anyAnswered) {
+            throw IllegalStateException("None of the relays (${first.joinToString()}) answered, so your server and relay lists can't be read. Nothing was signed.")
+        }
+
+        fun newest(
+            events: List<Event>,
+            kind: Int,
+        ) = events.filter { it.kind == kind && it.pubKey == pubKey }.maxByOrNull { it.createdAt }
+        var events = result.events
+        val unasked = RelayUrls.writeRelays(newest(events, MagpieSpec.KIND_RELAY_LIST)).filter { it !in first }
+        if (unasked.isNotEmpty()) events = events + nostr.query(unasked, filter).events
+        return newest(events, MagpieSpec.KIND_BLOSSOM_SERVERS) to newest(events, MagpieSpec.KIND_RELAY_LIST)
+    }
+
+    /**
+     * Where an event of this key goes: its own relays (write relays and its domain's) and the
+     * archival relays. A key with no relays of its own is looked for on consumers' index relays,
+     * so its events go there instead, with a warning that names the fix.
+     */
+    private fun targets(
+        pubKey: HexKey,
+        homeRelays: List<String>,
+        indexRelays: List<String>,
+        publishRelays: List<String>,
+    ): List<String> {
+        val home =
+            homeRelays.ifEmpty {
+                log.warn(
+                    "Magpie: ${PublicKeys.npub(pubKey)} has no relay list (kind 10002) and its domain's nostr.json lists no relays for it, so " +
+                        "consumers look for its events on their index relays; publishing to ${indexRelays.joinToString()}. Publish a relay list " +
+                        "with createNostrRelayList --relay=wss://… so your events live on relays you choose.",
+                )
+                RelayUrls.clean(indexRelays, max = Int.MAX_VALUE)
+            }
+        val targets = (home + RelayUrls.clean(publishRelays, max = Int.MAX_VALUE)).distinct()
+        if (targets.isEmpty()) throw IllegalStateException("No relays to publish to: set indexRelays or archivalRelays. Nothing was signed.")
+        return targets
+    }
+
+    /** The relays [group]'s domain lists for the signer; empty when there is no check, or it fails (with a warning). */
+    private suspend fun domainRelaysLenient(group: String?): List<String> {
+        val check = keyCheck ?: return emptyList()
+        if (group.isNullOrBlank()) return emptyList()
+        return try {
+            check.verify(group, signer.pubKey())
+        } catch (e: Exception) {
+            log.warn("Magpie: ${e.message} Continuing without your domain's relays.")
+            emptyList()
+        }
     }
 
     public suspend fun publish(settings: PublishSettings): PublishResult {
@@ -180,10 +251,10 @@ public class Publisher(
         val manifest = scanned.manifest
         log.lifecycle("Magpie: ${manifest.coordinate} has ${manifest.files.size} files in ${manifest.artifacts.size} modules")
 
-        keyCheck?.verify(settings.group, signer.pubKey())
-        val context = context(settings.indexerRelays)
-        val relays = (context.writeRelays + settings.publishRelays).ifEmpty { settings.indexerRelays }.distinct()
-        if (!manifest.coordinate.isSnapshot) refuseOverwrite(manifest, context, (relays + settings.indexerRelays).distinct())
+        val domainRelays = keyCheck?.verify(settings.group, signer.pubKey()).orEmpty()
+        val context = context(settings.indexRelays, domainRelays)
+        val relays = targets(context.pubKey, context.homeRelays, settings.indexRelays, settings.publishRelays)
+        if (!manifest.coordinate.isSnapshot) refuseOverwrite(manifest, context, relays)
 
         val files =
             scanned.files.map { (key, file) -> BlobSource(manifest[key]!!.sha256, file.length(), contentTypeOf(key), file = file) }
@@ -222,10 +293,10 @@ public class Publisher(
         }
         log.lifecycle("Magpie: merged ${partials.size} partial manifests into ${manifest.files.size} files")
 
-        keyCheck?.verify(settings.group, signer.pubKey())
-        val context = context(settings.indexerRelays)
-        val relays = (context.writeRelays + settings.publishRelays).ifEmpty { settings.indexerRelays }.distinct()
-        if (!manifest.coordinate.isSnapshot) refuseOverwrite(manifest, context, (relays + settings.indexerRelays).distinct())
+        val domainRelays = keyCheck?.verify(settings.group, signer.pubKey()).orEmpty()
+        val context = context(settings.indexRelays, domainRelays)
+        val relays = targets(context.pubKey, context.homeRelays, settings.indexRelays, settings.publishRelays)
+        if (!manifest.coordinate.isSnapshot) refuseOverwrite(manifest, context, relays)
 
         // Every blob must already be on a server, at the size the manifest says.
         val present = ConcurrentHashMap<String, MutableSet<String>>()
@@ -315,8 +386,9 @@ public class Publisher(
 
     /**
      * Fails if any module of [manifest] already has a release at this version by this key, and
-     * also if that can't be known: an earlier release went to the publisher's write relays, so at
-     * least one of them must answer (any relay, when there are none). Silence is not "no".
+     * also if that can't be known: an earlier release went to the publisher's own relays (write
+     * relays and its domain's), so at least one of them must answer (any relay, when there are
+     * none). Silence is not "no".
      */
     private suspend fun refuseOverwrite(
         manifest: Manifest,
@@ -335,12 +407,12 @@ public class Publisher(
                     ),
                 ),
             )
-        val writeRelays = context.writeRelays.mapNotNull { RelayUrlNormalizer.normalizeOrNull(it)?.url }.toSet()
-        val confirmed = if (writeRelays.isEmpty()) result.anyAnswered else result.answered.any { it in writeRelays }
+        val homeRelays = context.homeRelays.mapNotNull { RelayUrlNormalizer.normalizeOrNull(it)?.url }.toSet()
+        val confirmed = if (homeRelays.isEmpty()) result.anyAnswered else result.answered.any { it in homeRelays }
         if (!confirmed) {
             throw IllegalStateException(
                 "Can't confirm ${manifest.coordinate} isn't already released: " +
-                    (if (writeRelays.isEmpty()) "no relay" else "none of your write relays (${writeRelays.joinToString()})") +
+                    (if (homeRelays.isEmpty()) "no relay" else "none of your relays (${homeRelays.joinToString()})") +
                     " answered. Nothing was signed; try again when they're reachable.",
             )
         }
@@ -479,17 +551,45 @@ public class Publisher(
         return Hosted(uploaded.get(), present)
     }
 
-    /** Publishes a kind 10063 Blossom server list. */
+    /** Publishes a kind 10063 Blossom server list to the signer's own relays (and the archival ones). */
     public suspend fun createServerList(
         servers: List<String>,
-        relays: List<String>,
+        settings: ListSettings,
     ): Event {
         require(servers.isNotEmpty()) { "Give at least one Blossom server" }
+        val pubKey = signer.pubKey()
+        val domainRelays = RelayUrls.clean(domainRelaysLenient(settings.group))
+        val (_, relayList) = readLists(pubKey, settings.indexRelays, domainRelays)
+        val relays = targets(pubKey, (RelayUrls.writeRelays(relayList) + domainRelays).distinct(), settings.indexRelays, settings.publishRelays)
         val tags = servers.map { arrayOf("server", it.trimEnd('/')) }.toTypedArray()
         val event = signChecked(EventTemplate<Event>(now(), MagpieSpec.KIND_BLOSSOM_SERVERS, tags, ""))
         val results = nostr.publish(relays, event)
         if (results.values.none { it }) throw IllegalStateException("No relay accepted the server list (${relays.joinToString()})")
         log.lifecycle("Magpie: published Blossom server list ${servers.joinToString()} to ${results.filterValues { it }.size} relays")
+        return event
+    }
+
+    /**
+     * Publishes a NIP-65 relay list (kind 10002) naming [relays] as the signer's relays, to the
+     * index relays (where consumers look it up), to those relays, and to the domain's relays.
+     */
+    public suspend fun createRelayList(
+        relays: List<String>,
+        settings: ListSettings,
+    ): Event {
+        val listed = RelayUrls.clean(relays, max = Int.MAX_VALUE)
+        require(listed.isNotEmpty()) { "Give at least one relay (wss://…)" }
+        val domainRelays = RelayUrls.clean(domainRelaysLenient(settings.group))
+        val index = RelayUrls.clean(settings.indexRelays, max = Int.MAX_VALUE)
+        val targets = (index + listed + domainRelays).distinct()
+        val tags = listed.map { arrayOf("r", it) }.toTypedArray()
+        val event = signChecked(EventTemplate<Event>(now(), MagpieSpec.KIND_RELAY_LIST, tags, ""))
+        val results = nostr.publish(targets, event)
+        if (results.values.none { it }) throw IllegalStateException("No relay accepted the relay list (${targets.joinToString()})")
+        if (index.isNotEmpty() && index.none { results[it] == true }) {
+            log.warn("Magpie: no index relay accepted the relay list, so consumers that only know your npub can't find your relays yet")
+        }
+        log.lifecycle("Magpie: published relay list ${listed.joinToString()} to ${results.filterValues { it }.size} relays")
         return event
     }
 

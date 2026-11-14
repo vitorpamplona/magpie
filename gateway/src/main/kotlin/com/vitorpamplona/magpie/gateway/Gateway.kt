@@ -56,7 +56,8 @@ import java.util.Properties
  * trust on first use and keeps no lock: whoever runs it decides the keys.
  */
 data class GatewayConfig(
-    val relays: List<String>,
+    /** Where the trusted keys' relay lists (kind 10002) are looked up; their releases are read from their own relays. */
+    val indexRelays: List<String>,
     val trust: Map<String, String>,
     val fallbackServers: List<String> = emptyList(),
     val cacheDir: File = File("/var/cache/magpie"),
@@ -64,7 +65,7 @@ data class GatewayConfig(
     val port: Int = 8080,
 ) {
     init {
-        require(relays.isNotEmpty()) { "Configure at least one relay (MAGPIE_RELAYS)" }
+        require(indexRelays.isNotEmpty()) { "Configure at least one index relay (MAGPIE_INDEX_RELAYS): where the trusted keys' relay lists are looked up" }
         require(trust.isNotEmpty()) { "Configure at least one group=npub pair (MAGPIE_TRUST)" }
         trust.forEach { (group, key) ->
             val pin = Pin.parse(key)
@@ -74,7 +75,7 @@ data class GatewayConfig(
 
     fun engineConfig(): Map<String, String> =
         mapOf(
-            EngineConfig.RELAYS to relays.joinToString("\n"),
+            EngineConfig.INDEX_RELAYS to indexRelays.joinToString("\n"),
             EngineConfig.GROUPS to trust.entries.joinToString("\n") { "${it.key}=${it.value}" },
             EngineConfig.FALLBACK_SERVERS to fallbackServers.joinToString("\n"),
             EngineConfig.CACHE_DIR to cacheDir.absolutePath,
@@ -85,7 +86,7 @@ data class GatewayConfig(
     companion object {
         /**
          * From environment variables, optionally overridden by a properties file (`--config=…`):
-         * `MAGPIE_RELAYS` / `relays` (comma-separated), `MAGPIE_TRUST` / `trust`
+         * `MAGPIE_INDEX_RELAYS` / `indexRelays` (comma-separated), `MAGPIE_TRUST` / `trust`
          * (`com.example=npub1…,org.other=npub1…`), `MAGPIE_FALLBACK_SERVERS` / `fallbackServers`,
          * `MAGPIE_CACHE_DIR` / `cacheDir`, `PORT` / `port`, `HOST` / `host`.
          */
@@ -111,7 +112,7 @@ data class GatewayConfig(
                 .filter { it.isNotEmpty() }
 
             return GatewayConfig(
-                relays = list("relays", "MAGPIE_RELAYS"),
+                indexRelays = list("indexRelays", "MAGPIE_INDEX_RELAYS"),
                 trust = list("trust", "MAGPIE_TRUST").associate { GroupRule.parse(it).let { rule -> rule.group to it.substringAfter('=').trim() } },
                 fallbackServers = list("fallbackServers", "MAGPIE_FALLBACK_SERVERS"),
                 cacheDir = File(value("cacheDir", "MAGPIE_CACHE_DIR") ?: "/var/cache/magpie"),
@@ -207,6 +208,6 @@ fun startGateway(
 fun main(args: Array<String>) {
     val file = args.firstOrNull { it.startsWith("--config=") }?.substringAfter('=')?.let(::File)
     val config = GatewayConfig.load(System.getenv(), file)
-    Slf4jLog.lifecycle("Magpie gateway on ${config.host}:${config.port}, relays ${config.relays}, trusting ${config.trust.keys}")
+    Slf4jLog.lifecycle("Magpie gateway on ${config.host}:${config.port}, index relays ${config.indexRelays}, trusting ${config.trust.keys}")
     startGateway(config, wait = true)
 }

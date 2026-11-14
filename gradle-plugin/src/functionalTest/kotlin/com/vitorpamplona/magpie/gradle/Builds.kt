@@ -49,6 +49,9 @@ class Builds : AutoCloseable {
     val wellKnown: MutableMap<String, MutableMap<String, String>> =
         java.util.concurrent.ConcurrentHashMap(mapOf("example.com" to mutableMapOf("releases" to publisher.pubKey)))
 
+    /** The `relays` every nostr.json lists, by pubkey. */
+    val wellKnownRelays: MutableMap<String, List<String>> = java.util.concurrent.ConcurrentHashMap()
+
     private val nip05Server =
         com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0).apply {
             createContext("/") { ex ->
@@ -57,7 +60,11 @@ class Builds : AutoCloseable {
                 if (names == null) {
                     ex.sendResponseHeaders(404, -1)
                 } else {
-                    val body = names.entries.joinToString(",", "{\"names\":{", "}}") { "\"${it.key}\":\"${it.value}\"" }.toByteArray()
+                    val relays =
+                        wellKnownRelays.entries.joinToString(",", "\"relays\":{", "}") { (key, urls) ->
+                            "\"$key\":" + urls.joinToString(",", "[", "]") { "\"$it\"" }
+                        }
+                    val body = names.entries.joinToString(",", "{\"names\":{", "},$relays}") { "\"${it.key}\":\"${it.value}\"" }.toByteArray()
                     ex.sendResponseHeaders(200, body.size.toLong())
                     ex.responseBody.use { it.write(body) }
                 }
@@ -128,7 +135,7 @@ class Builds : AutoCloseable {
             java { withSourcesJar() }
             publishing { publications { create<MavenPublication>("maven") { from(components["java"]) } } }
             magpie {
-                relays("${relay.url}")
+                indexRelays("${relay.url}")
                 nip05BaseUrl.set("$nip05Base")
                 $extraMagpie
             }
@@ -158,7 +165,7 @@ class Builds : AutoCloseable {
             plugins { id("com.vitorpamplona.magpie") version "$pluginVersion" }
             dependencyResolutionManagement { repositories { mavenCentral() } }
             magpie {
-                relays("${relay.url}")
+                indexRelays("${relay.url}")
                 group("com.example") { $trust }
                 cacheDir.set(file("${cache.absolutePath}"))
                 relayTimeoutMillis.set(3000L)
