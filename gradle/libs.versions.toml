@@ -1,0 +1,41 @@
+[versions]
+kotlin = "2.4.21"
+# Quartz from Maven Central. 2.15.1 is the newest release Central serves (2.16/2.17 are tagged but
+# blocked by Central's upload limit until 2026-12-01). It already carries the pure-Kotlin
+# secp256k1 (Secp256k1InstanceKotlin) the resolver verifies with.
+quartz = "2.15.1"
+kotlinxCoroutines = "1.11.0"
+kotlinxSerialization = "1.12.0"
+okhttp = "5.5.1"
+ktor = "3.6.1"
+junit = "6.1.3"
+logback = "1.6.6"
+spotless = "8.11.0"
+pluginPublish = "2.2.1"
+
+[libraries]
+quartz = { module = "com.vitorpamplona.quartz:quartz", version.ref = "quartz" }
+kotlin-stdlib = { module = "org.jetbrains.kotlin:kotlin-stdlib", version.ref = "kotlin" }
+kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
+kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }
+kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinxCoroutines" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
+okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
+ktor-server-core = { module = "io.ktor:ktor-server-core", version.ref = "ktor" }
+ktor-server-cio = { module = "io.ktor:ktor-server-cio", version.ref = "ktor" }
+ktor-server-websockets = { module = "io.ktor:ktor-server-websockets", version.ref = "ktor" }
+ktor-server-test-host = { module = "io.ktor:ktor-server-test-host", version.ref = "ktor" }
+logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
+junit-launcher = { module = "org.junit.platform:junit-platform-launcher" }
+
+[plugins]
+kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+kotlinJvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+samWithReceiver = { id = "org.jetbrains.kotlin.plugin.sam.with.receiver", version.ref = "kotlin" }
+spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
+pluginPublish = { id = "com.gradle.plugin-publish", version.ref = "pluginPublish" }
+ktor = { id = "io.ktor.plugin", version.ref = "ktor" }
