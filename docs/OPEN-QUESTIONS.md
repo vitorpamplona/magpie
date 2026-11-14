@@ -101,8 +101,10 @@ are hard to reverse once releases exist.
 
 ## Publishing
 
-16. **Where to publish.** The publisher's NIP-65 write relays plus `archivalRelays`; if both are
-    empty, the relays the build reads from. At least one relay must accept the event.
+16. **Where to publish.** The publisher's own relays (NIP-65 write relays and the relays its
+    domain's `nostr.json` lists for it) plus `archivalRelays`. A key with no relays of its own
+    goes to the index relays, because that is where consumers look for such a key. At least one
+    relay must accept the event.
 
 17. **Which servers go in `server` hints.** The servers that ended up holding every blob; if none
     holds all of them, every server that holds any.
@@ -116,6 +118,14 @@ are hard to reverse once releases exist.
     `magpie.partialsDir`. Close re-checks that every listed blob is on a server before signing.
 
 20. **Snapshot overwrite checks.** None: a snapshot is meant to be replaced.
+
+21. **No default relays.** Magpie ships no relay list: a default would make those relays
+    everyone's dependency. Each key's events live on its own relays (the outbox model), found
+    through its NIP-65 list on the `indexRelays` a build names, or through the `relays` its
+    domain's `nostr.json` lists. A group trusted through its domain can need no relay
+    configuration at all. Open: whether to also read NIP-05's `nip46` relays, and whether a
+    key's relay list should be pinned in the lock (today it is refreshed, since moving relays is
+    routine and the events are signed either way).
 
 ## Deferred (out of scope for v1)
 

@@ -106,8 +106,12 @@ are Maven's timestamped ones, from which clients generate the version-level
 | Who signed a file | `{"kinds":[3071,33071], "#x":["<sha256>"]}` |
 | Where blobs are | `{"kinds":[10063], "authors":[<pinned>]}` |
 
-Clients query several relays and merge the results; a relay can only withhold events, never
-forge them, and withholding is caught by the lock file.
+Clients send these to the pinned key's own relays (the outbox model): the write relays of its
+NIP-65 relay list (kind 10002), and the relays the domain that vouches for it lists in
+`nostr.json` (`"relays":{"<hex>":[…]}`). Clients find the relay list on index relays they choose
+and on those `nostr.json` relays. Publishers SHOULD send releases to those relays. No relay is
+special: clients merge results from all of them; a relay can only withhold events, never forge
+them, and withholding is caught by the lock file.
 
 ## Why these tag letters
 
