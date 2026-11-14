@@ -73,7 +73,9 @@ are hard to reverse once releases exist.
 10. **The secp256k1 JNI.** Excluded from the daemon's engine; resolution verifies with Quartz's
     pure-Kotlin secp256k1. Publishing signs in a Gradle worker *process*, the only place the JNI
     loads. ACINQ's JNI 0.24.0 targets Java 21, so the worker uses a Java 21 toolchain when the
-    daemon runs on 17. Resolution itself runs on Java 17.
+    daemon runs on 17. Resolution needs a daemon on Java 21: Quartz's pure-Kotlin secp256k1 calls
+    `Math.unsignedMultiplyHigh` (Java 18), and current Quartz targets Java 21 outright. The
+    settings plugin says so at configuration on an older daemon.
 
 11. **When the server starts.** The repository URL is a provider; Gradle evaluates it when it
     first resolves a Magpie group, which can be during configuration-cache *storing*. No relay or
@@ -97,8 +99,8 @@ are hard to reverse once releases exist.
 
 14. **Minimum Gradle version.** 8.8: earlier versions generate no Kotlin DSL accessor for the
     `magpie { }` settings extension (8.6/8.7 can only use `configure<MagpieExtension> { }`). CI
-    runs the end-to-end tests on 8.8 with the daemon on JDK 17, on 8.14, and on 9.8.2 (the
-    repository's wrapper).
+    runs the end-to-end tests on 8.8, 8.14 and 9.8.2 (the repository's wrapper), and checks that
+    a daemon on JDK 17 fails at configuration with a hint.
 
 15. **Lock file writes.** The engine writes `gradle/magpie.lock` during resolution (one writer at
     a time, atomic replace). CI can freeze it (`-Pmagpie.frozenLock=true`): any new entry then

@@ -72,6 +72,15 @@ class MagpieSettingsPlugin : Plugin<Settings> {
             return
         }
         val offline = settings.startParameter.isOffline
+        if (!offline && Runtime.version().feature() < MIN_DAEMON_JAVA) {
+            // Resolution checks signatures in this daemon with Quartz, which needs Java 21: on an
+            // older JVM it would fail on the first file instead of here.
+            throw GradleException(
+                "Magpie resolves in the Gradle daemon and needs Java $MIN_DAEMON_JAVA or newer; this daemon runs Java " +
+                    "${Runtime.version().feature()}. Run Gradle on Java $MIN_DAEMON_JAVA (JAVA_HOME, or org.gradle.java.home in " +
+                    "gradle.properties); your projects can still compile for older Java with a toolchain.",
+            )
+        }
         if (ext.indexRelays.get().isEmpty()) {
             // Without a domain there's no nostr.json to name the key's relays, so only an index relay can.
             groups.filter { it.pin != MagpieGroup.DOMAIN && !it.pin.startsWith("nip05:") }.takeIf { it.isNotEmpty() }?.let { pinned ->
@@ -243,3 +252,6 @@ internal object Bech32 {
         return out.joinToString("") { "%02x".format(it) }
     }
 }
+
+/** The daemon's minimum Java version for resolving: Quartz's signature checks need Java 21. */
+private const val MIN_DAEMON_JAVA = 21
