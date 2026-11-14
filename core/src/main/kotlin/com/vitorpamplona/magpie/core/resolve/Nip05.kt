@@ -78,6 +78,12 @@ public class HttpNip05Resolver(
             .followSslRedirects(false)
             .build()
 
+    /** [domain] has no DNS record while its registrable domain has one: it definitely doesn't exist. */
+    private fun subdomainIsMissing(domain: String): Boolean {
+        val parent = registrableDomain(domain) ?: return false
+        return parent != domain && !resolves(domain) && resolves(parent)
+    }
+
     override suspend fun lookup(identifier: String): Nip05Answer {
         val id = Nip05Id.parse(identifier) ?: return Nip05Answer.Unreachable("not a NIP-05 identifier: $identifier")
         val base = baseUrlTemplate?.replace("{domain}", id.domain)?.trimEnd('/') ?: "https://${id.domain}"
@@ -112,14 +118,11 @@ public class HttpNip05Resolver(
                     }
                 }
             } catch (e: UnknownHostException) {
-                val parent = registrableDomain(id.domain)
-                if (parent != null && parent != id.domain && resolves(parent)) {
-                    Nip05Answer.Absent
-                } else {
-                    Nip05Answer.Unreachable("DNS lookup for ${id.domain} failed")
-                }
+                if (subdomainIsMissing(id.domain)) Nip05Answer.Absent else Nip05Answer.Unreachable("DNS lookup for ${id.domain} failed")
             } catch (e: IOException) {
-                Nip05Answer.Unreachable("${e.javaClass.simpleName}: ${e.message} ($url)")
+                // Behind an HTTPS proxy the proxy resolves the name, so a missing subdomain comes
+                // back as a failed CONNECT, not UnknownHostException: ask DNS directly.
+                if (subdomainIsMissing(id.domain)) Nip05Answer.Absent else Nip05Answer.Unreachable("${e.javaClass.simpleName}: ${e.message} ($url)")
             }
         }
     }
