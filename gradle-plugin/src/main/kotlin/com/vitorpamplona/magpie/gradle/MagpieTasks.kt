@@ -54,11 +54,16 @@ abstract class MagpieEngineTask : DefaultTask() {
     @get:Input
     abstract val engineTask: Property<String>
 
+    /** Where the signer's relay list (kind 10002) is looked up, besides its domain's relays. */
     @get:Input
-    abstract val relays: ListProperty<String>
+    abstract val indexRelays: ListProperty<String>
 
     @get:Input
     abstract val archivalRelays: ListProperty<String>
+
+    /** The group released: its domain vouches for the key and lists the key's relays. */
+    @get:Input
+    abstract val groupId: Property<String>
 
     @get:Input
     abstract val bunkerEnv: Property<String>
@@ -86,10 +91,10 @@ abstract class MagpieEngineTask : DefaultTask() {
 
     @TaskAction
     fun run() {
-        if (relays.get().isEmpty()) throw GradleException("Magpie: set magpie { relays(\"wss://…\") } to read your server and relay lists from.")
         val config =
             buildMap {
-                put(EngineConfig.INDEXER_RELAYS, relays.get().joinToString("\n"))
+                put(EngineConfig.INDEX_RELAYS, indexRelays.get().joinToString("\n"))
+                put(EngineConfig.GROUP, groupId.get())
                 put(EngineConfig.PUBLISH_RELAYS, archivalRelays.get().joinToString("\n"))
                 put(EngineConfig.RELEASE_KEY_CHECK, releaseKeyCheck.get())
                 nip05BaseUrl.orNull?.let { put(EngineConfig.NIP05_BASE_URL, it) }
@@ -134,9 +139,6 @@ abstract class PublishToNostrTask : MagpieEngineTask() {
     abstract val repoDir: DirectoryProperty
 
     @get:Input
-    abstract val groupId: Property<String>
-
-    @get:Input
     abstract val version: Property<String>
 
     @get:Input
@@ -177,7 +179,6 @@ abstract class PublishToNostrTask : MagpieEngineTask() {
     override fun extraConfig(): Map<String, String> =
         mapOf(
             EngineConfig.REPO_DIR to repoDir.get().asFile.absolutePath,
-            EngineConfig.GROUP to groupId.get(),
             EngineConfig.VERSION to version.get(),
             EngineConfig.ARTIFACT to artifactId.get(),
             EngineConfig.PARTIAL to partial.get().toString(),
@@ -193,9 +194,6 @@ abstract class PublishToNostrTask : MagpieEngineTask() {
 }
 
 abstract class CloseNostrReleaseTask : MagpieEngineTask() {
-    @get:Input
-    abstract val groupId: Property<String>
-
     @get:Input
     abstract val version: Property<String>
 
@@ -213,7 +211,6 @@ abstract class CloseNostrReleaseTask : MagpieEngineTask() {
     override fun extraConfig(): Map<String, String> =
         mapOf(
             EngineConfig.REPO_DIR to partialsDir.get().asFile.absolutePath,
-            EngineConfig.GROUP to groupId.get(),
             EngineConfig.VERSION to version.get(),
             EngineConfig.ARTIFACT to artifactId.get(),
             EngineConfig.PARTIAL_DIR to partialsDir.get().asFile.absolutePath,
@@ -236,6 +233,21 @@ abstract class CreateServerListTask : MagpieEngineTask() {
     override fun extraConfig(): Map<String, String> {
         if (servers.get().isEmpty()) throw GradleException("Give at least one --server=https://…")
         return mapOf(EngineConfig.SERVERS to servers.get().joinToString("\n"))
+    }
+}
+
+abstract class CreateRelayListTask : MagpieEngineTask() {
+    @get:Input
+    abstract val listedRelays: ListProperty<String>
+
+    @Option(option = "relay", description = "A relay your events live on (wss://…); repeat for more.")
+    fun setRelayOption(values: List<String>) {
+        listedRelays.set(values)
+    }
+
+    override fun extraConfig(): Map<String, String> {
+        if (listedRelays.get().isEmpty()) throw GradleException("Give at least one --relay=wss://…")
+        return mapOf(EngineConfig.LIST_RELAYS to listedRelays.get().joinToString("\n"))
     }
 }
 

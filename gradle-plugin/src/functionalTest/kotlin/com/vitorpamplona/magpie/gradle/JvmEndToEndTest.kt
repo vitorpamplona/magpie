@@ -163,6 +163,23 @@ class JvmEndToEndTest {
     }
 
     @Test
+    fun theDomainsRelaysNeedNoIndexRelays() {
+        // Neither side names a relay: the domain's nostr.json lists where the key's events are.
+        builds.wellKnownRelays[builds.publisher.pubKey] = listOf(builds.relay.url)
+        val none = "indexRelays.set(emptyList<String>())"
+        builds.run(builds.javaLibrary("lib", "1.0.0", extraMagpie = none), "publishToNostr", env = builds.signerEnv)
+        val app = builds.consumer("app", "com.example:greeter:1.0.0", extraSettings = none)
+        assertTrue("GREETING: hello from nostr" in builds.run(app, "run").output)
+    }
+
+    @Test
+    fun aPinnedKeyWithoutIndexRelaysFailsAtConfiguration() {
+        val app = builds.consumer("app", "com.example:greeter:1.0.0", trust = """publisher("${builds.publisher.npub}")""", extraSettings = "indexRelays.set(emptyList<String>())")
+        val result = builds.fail(app, "help")
+        assertTrue("com.example trusts a key directly" in result.output && "indexRelays" in result.output, result.output)
+    }
+
+    @Test
     fun offlineKeepsSubgroupsPinnedToAnotherKey() {
         val mallory = com.vitorpamplona.magpie.testkit.TestIdentity.MALLORY
         val noCheck = "verifyReleaseKey.set(false)"

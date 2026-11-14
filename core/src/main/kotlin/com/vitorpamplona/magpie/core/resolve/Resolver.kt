@@ -43,7 +43,8 @@ import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
 public data class ResolverSettings(
-    val relays: List<String>,
+    /** Where keys' relay lists are looked up ([RelayQuery]). */
+    val indexRelays: List<String>,
     val fallbackServers: List<String> = emptyList(),
     val cacheDir: File,
     val offline: Boolean = false,

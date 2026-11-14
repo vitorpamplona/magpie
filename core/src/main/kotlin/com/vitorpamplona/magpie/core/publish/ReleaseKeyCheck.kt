@@ -44,10 +44,11 @@ public class ReleaseKeyCheck(
     private val identifier: String? = null,
     private val registrableDomain: (String) -> String? = PublicSuffix::registrableDomain,
 ) {
+    /** Checks [signer] is [group]'s release key; returns the relays the domain lists for it. */
     public suspend fun verify(
         group: String,
         signer: HexKey,
-    ) {
+    ): List<String> {
         val identifiers =
             if (identifier != null) {
                 require(ReleaseIdentity.belongsTo(identifier, group, registrableDomain)) {
@@ -72,6 +73,7 @@ public class ReleaseKeyCheck(
                             "${PublicKeys.npub(signer)}. Consumers would reject the release. Sign with that key, or update the domain's nostr.json.",
                     )
                 }
+                return answer.relays
             }
 
             is VouchedKey.NoneListed -> {

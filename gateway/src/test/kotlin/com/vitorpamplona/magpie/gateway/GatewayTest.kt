@@ -90,7 +90,7 @@ class GatewayTest {
         val local =
             ResolverStack.create(
                 mapOf(
-                    EngineConfig.RELAYS to relay.url,
+                    EngineConfig.INDEX_RELAYS to relay.url,
                     EngineConfig.GROUPS to "com.example=${alice.npub}",
                     EngineConfig.CACHE_DIR to File(root, "local-cache").path,
                 ),
@@ -131,16 +131,16 @@ class GatewayTest {
         val config =
             GatewayConfig.load(
                 mapOf(
-                    "MAGPIE_RELAYS" to "wss://a.example, wss://b.example",
+                    "MAGPIE_INDEX_RELAYS" to "wss://a.example, wss://b.example",
                     "MAGPIE_TRUST" to "com.example=${alice.npub},org.other=${alice.pubKey}",
                     "PORT" to "9090",
                 ),
             )
-        assertEquals(listOf("wss://a.example", "wss://b.example"), config.relays)
+        assertEquals(listOf("wss://a.example", "wss://b.example"), config.indexRelays)
         assertEquals(setOf("com.example", "org.other"), config.trust.keys)
         assertEquals(9090, config.port)
         assertFailsWith<IllegalArgumentException> {
-            GatewayConfig.load(mapOf("MAGPIE_RELAYS" to "wss://a", "MAGPIE_TRUST" to "com.example=nip05:alice@example.com"))
+            GatewayConfig.load(mapOf("MAGPIE_INDEX_RELAYS" to "wss://a", "MAGPIE_TRUST" to "com.example=nip05:alice@example.com"))
         }
     }
 }

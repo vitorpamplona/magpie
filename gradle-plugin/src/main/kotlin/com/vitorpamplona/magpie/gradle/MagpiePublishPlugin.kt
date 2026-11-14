@@ -37,8 +37,8 @@ import javax.inject.Inject
  * `magpie { … }` in a published project's `build.gradle.kts`:
  * ```
  * magpie {
- *     relays("wss://relay.example.com")          // where to read your kind 10063 / 10002 (or -Pmagpie.relays=…)
- *     archivalRelays("wss://archive.example.com") // published to besides your NIP-65 write relays
+ *     indexRelays("wss://purplepag.es")           // where your relay list (kind 10002) is looked up (or -Pmagpie.indexRelays=…)
+ *     archivalRelays("wss://archive.example.com") // published to besides your own relays
  *     signer { bunkerEnv.set("MAGPIE_BUNKER") }   // the default; or nsecEnv
  * }
  * ```
@@ -46,10 +46,14 @@ import javax.inject.Inject
 abstract class MagpiePublishExtension
     @Inject
     constructor() {
-        /** Relays to read the publisher's server list (10063) and relay list (10002) from. */
-        abstract val relays: ListProperty<String>
+        /**
+         * Index relays: where your relay list (kind 10002) is looked up, besides the relays your
+         * domain's nostr.json lists for your key. Your server list and releases then live on your
+         * own relays (write relays and the domain's); the index relays only when you have neither.
+         */
+        abstract val indexRelays: ListProperty<String>
 
-        /** Relays that receive every release in addition to the publisher's NIP-65 write relays. */
+        /** Relays that receive every release in addition to the publisher's own relays. */
         abstract val archivalRelays: ListProperty<String>
 
         /** The root artifactId; the Kotlin Multiplatform root module or the single publication by default. */
@@ -72,8 +76,8 @@ abstract class MagpiePublishExtension
 
         val signer: MagpieSignerSpec = MagpieSignerSpec()
 
-        fun relays(vararg urls: String) {
-            relays.addAll(urls.toList())
+        fun indexRelays(vararg urls: String) {
+            indexRelays.addAll(urls.toList())
         }
 
         fun archivalRelays(vararg urls: String) {
@@ -102,6 +106,7 @@ class MagpieSignerSpec {
  * - `publishToNostr` (`--partial` on each host of a multi-host build)
  * - `closeNostrRelease` merges the partial manifests and signs once
  * - `createNostrServerList --server=https://…` publishes your Blossom server list (kind 10063)
+ * - `createNostrRelayList --relay=wss://…` publishes your relay list (kind 10002) to the index relays
  */
 class MagpiePublishPlugin : Plugin<Project> {
     override fun apply(project: Project) {
@@ -111,9 +116,9 @@ class MagpiePublishPlugin : Plugin<Project> {
         ext.verifyReleaseKey.convention(true)
         // Also settable as Gradle properties (comma-separated), so a build can apply the plugin
         // only for releases without naming its types in the build script.
-        ext.relays.convention(
+        ext.indexRelays.convention(
             project.providers
-                .gradleProperty("magpie.relays")
+                .gradleProperty("magpie.indexRelays")
                 .map { list(it) }
                 .orElse(emptyList()),
         )
@@ -152,7 +157,8 @@ class MagpiePublishPlugin : Plugin<Project> {
         val configure: (MagpieEngineTask) -> Unit = { task ->
             task.group = "publishing"
             task.cacheRoot.set(cacheRoot)
-            task.relays.set(ext.relays)
+            task.indexRelays.set(ext.indexRelays)
+            task.groupId.set(rootGroup)
             task.archivalRelays.set(ext.archivalRelays)
             task.bunkerEnv.set(project.provider { ext.signer.bunkerEnv })
             task.nsecEnv.set(project.provider { ext.signer.nsecEnv })
@@ -170,7 +176,6 @@ class MagpiePublishPlugin : Plugin<Project> {
             dependsOn("publishAllPublicationsToMagpieLocalRepository")
             engineTask.set(EngineConfig.TASK_PUBLISH)
             this.repoDir.set(repoDir)
-            groupId.set(rootGroup)
             version.set(rootVersion)
             artifactId.set(rootArtifact)
             partialsDir.set(ext.partialsDir)
@@ -180,7 +185,6 @@ class MagpiePublishPlugin : Plugin<Project> {
             configure(this)
             description = "Merges the partial manifests of a multi-host publish, checks every .module reference, and signs the release."
             engineTask.set(EngineConfig.TASK_CLOSE)
-            groupId.set(rootGroup)
             version.set(rootVersion)
             artifactId.set(rootArtifact)
             partialsDir.set(ext.partialsDir)
@@ -189,6 +193,11 @@ class MagpiePublishPlugin : Plugin<Project> {
             configure(this)
             description = "Publishes a Blossom server list (kind 10063) for the signer: --server=https://… (repeatable)."
             engineTask.set(EngineConfig.TASK_CREATE_SERVER_LIST)
+        }
+        project.tasks.register("createNostrRelayList", CreateRelayListTask::class.java) {
+            configure(this)
+            description = "Publishes your relay list (kind 10002) to the index relays: --relay=wss://… (repeatable)."
+            engineTask.set(EngineConfig.TASK_CREATE_RELAY_LIST)
         }
     }
 }

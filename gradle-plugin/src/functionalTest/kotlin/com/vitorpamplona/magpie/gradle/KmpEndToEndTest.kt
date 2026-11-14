@@ -110,7 +110,7 @@ class KmpEndToEndTest {
             """.trimIndent(),
         )
         // The relays come from a Gradle property, as a build that applies the plugin conditionally sets them.
-        File(d, "gradle.properties").appendText("\nmagpie.relays=${builds.relay.url}\n")
+        File(d, "gradle.properties").appendText("\nmagpie.indexRelays=${builds.relay.url}\n")
         File(d, "src/commonMain/kotlin/com/example/Greeter.kt").apply { parentFile.mkdirs() }.writeText(
             """
             package com.example

@@ -74,7 +74,7 @@ class AuditRegressionTest {
             hostile.add(*world.relay.all().toTypedArray())
             hostile.transformOutgoing = { frame -> frame.replace(Regex("\"sig\":\"[0-9a-f]{8}"), "\"sig\":\"00000000") }
             world.relay.delayOutgoingMs = 300
-            world.stack(alice, extra = mapOf(EngineConfig.RELAYS to "${hostile.url}\n${world.relay.url}")).use { stack ->
+            world.stack(alice, extra = mapOf(EngineConfig.INDEX_RELAYS to "${hostile.url}\n${world.relay.url}")).use { stack ->
                 assertContentEquals(
                     File(repo.dir, "com/example/lib-jvm/1.0.0/lib-jvm-1.0.0.jar").readBytes(),
                     stack.get("com/example/lib-jvm/1.0.0/lib-jvm-1.0.0.jar").bytes(),
@@ -85,7 +85,7 @@ class AuditRegressionTest {
 
     @Test
     fun aRelayOutageIsAnErrorNotAMissAndIsNotRemembered() {
-        world.stack(alice, extra = mapOf(EngineConfig.RELAYS to deadRelay)).use { stack ->
+        world.stack(alice, extra = mapOf(EngineConfig.INDEX_RELAYS to deadRelay)).use { stack ->
             val path = "com/example/lib/1.0.0/lib-1.0.0.pom"
             assertEquals(502, stack.get(path).status)
             assertEquals(502, stack.get(path).status, "not turned into a cached 404")

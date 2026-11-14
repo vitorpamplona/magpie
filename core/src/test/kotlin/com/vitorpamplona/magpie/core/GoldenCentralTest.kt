@@ -80,7 +80,7 @@ class GoldenCentralTest {
         val stack =
             com.vitorpamplona.magpie.core.engine.ResolverStack.create(
                 mapOf(
-                    com.vitorpamplona.magpie.bridge.EngineConfig.RELAYS to world.relay.url,
+                    com.vitorpamplona.magpie.bridge.EngineConfig.INDEX_RELAYS to world.relay.url,
                     com.vitorpamplona.magpie.bridge.EngineConfig.GROUPS to "com.vitorpamplona.quartz=${alice.npub}",
                     com.vitorpamplona.magpie.bridge.EngineConfig.CACHE_DIR to world.dir("cache").path,
                 ),

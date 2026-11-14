@@ -5,8 +5,8 @@
 Magpie lets Gradle and Kotlin Multiplatform projects publish libraries as
 [Blossom](https://github.com/hzrd149/blossom) blobs pinned by signed Nostr events, and resolve
 them as if from a normal Maven repository. There is no registry and no server to run: blobs live
-on the publisher's own Blossom servers, releases are events on any relays, and each consumer pins
-the groups it uses to a publisher key.
+on the publisher's own Blossom servers, releases are events on the publisher's own relays, and
+each consumer pins the groups it uses to a publisher key. No relay or server is everyone's.
 
 - Releases are **immutable**: for a `group:artifact:version`, the earliest release event by the
   pinned key wins, and a lock file pins the one you first resolved.
@@ -29,15 +29,16 @@ plugins {
 }
 
 magpie {
-    relays("wss://relay.damus.io", "wss://nos.lol")
     group("com.example")                           // the key releases@example.com names (see below)
     group("org.other") { publisher("npub1…") }     // or a key you pin yourself
+    indexRelays("wss://purplepag.es")              // where pinned keys' relay lists are found
 }
 ```
 
 Then depend on it as usual: `implementation("com.example:lib:1.0.0")`.
 
-Requires Gradle 8.8 or newer. The plugin starts a Maven repository on `127.0.0.1` inside the Gradle daemon the
+Requires Gradle 8.8 or newer, running on Java 21 or newer (your projects can still compile for
+older Java with a toolchain). The plugin starts a Maven repository on `127.0.0.1` inside the Gradle daemon the
 first time Gradle needs one of those groups, and registers it with `exclusiveContent`, so those
 groups never come from anywhere else.
 
@@ -48,6 +49,14 @@ way Maven Central ties a namespace to a domain: `group("com.example.lib")` trust
 because `_` is usually the domain's general identity. `nip05("maven@example.com")` picks another
 name on those domains; `publisher("npub1…")` pins a key with no domain involved (the only option
 for a group that isn't a domain). Each group covers its subgroups.
+
+**Where releases are found.** Each key's events live on its own relays (the outbox model): the
+write relays of its NIP-65 relay list (kind 10002), and the relays its domain's `nostr.json` lists
+for it (`"relays":{"<hex>":["wss://…"]}`). Magpie looks the relay list up on your
+`indexRelays` and on those `nostr.json` relays, then reads the key's releases and Blossom server
+list from its relays. A group trusted through its domain needs no `indexRelays` when the domain
+lists relays for the key; a pinned key does, and a build that pins one without them fails at
+configuration. The index relays are read for releases only when a key has no relays of its own.
 
 Commit `gradle/magpie.lock`: it records the key each group's domain vouched for and the manifest
 (the exact files) of every version you resolved. A domain that later names another key, or a
@@ -73,8 +82,8 @@ group = "com.example"
 version = "1.0.0"
 
 magpie {
-    relays("wss://relay.damus.io", "wss://purplepag.es")   // where your kind 10063 / 10002 live
-    archivalRelays("wss://nos.lol")                         // also receive every release
+    indexRelays("wss://purplepag.es")   // where your relay list (kind 10002) is looked up
+    archivalRelays("wss://nos.lol")     // also receive every release
 }
 ```
 
@@ -91,13 +100,21 @@ configuration cache: they're read from the environment when the task runs.
 1. checks that your group's domain vouches for the signing key (`releases@…` in its
    `nostr.json`; the error says exactly what to add), so nobody's build will reject the release;
    `magpie { verifyReleaseKey.set(false) }` skips this for groups that aren't domains;
-2. reads your Blossom server list (kind 10063) and write relays (NIP-65); with no server list it
+2. reads your relay list (kind 10002) from the index relays and the relays your domain lists for
+   your key, then your Blossom server list (kind 10063) from your relays; with no server list it
    stops and tells you to run `./gradlew createNostrServerList --server=https://your.blossom.server`;
 3. refuses if this version is already released (publish a new version instead);
 4. checks every blob against every server (BUD-06 preflight) and stops **before signing** if a
    blob fits on none;
 5. uploads what's missing under **one** BUD-02 authorization, uploads the manifest, signs the
-   release and publishes it: **two signatures** per release.
+   release and publishes it to your relays (write relays and your domain's) and the archival
+   relays: **two signatures** per release.
+
+Your relays are where consumers look, so give your key some: list them for it in your domain's
+`nostr.json`, publish a relay list with `./gradlew createNostrRelayList --relay=wss://…`
+(it goes to the index relays), or both. A key with neither is published to, and looked for on,
+the index relays, with a warning. `indexRelays` and `archivalRelays` can also come from
+`-Pmagpie.indexRelays=…` and `-Pmagpie.archivalRelays=…` (comma-separated).
 
 A bad release is fixed the Maven Central way: publish a new version. There is no yank.
 
@@ -126,7 +143,7 @@ For Maven, sbt or a shared cache, run the same resolver as a service:
 ```bash
 docker build -f gateway/Dockerfile -t magpie-gateway .
 docker run -p 8080:8080 -v magpie-cache:/var/cache/magpie \
-  -e MAGPIE_RELAYS=wss://relay.damus.io,wss://nos.lol \
+  -e MAGPIE_INDEX_RELAYS=wss://purplepag.es \
   -e MAGPIE_TRUST=com.example=npub1…,org.other=npub1… \
   magpie-gateway
 ```

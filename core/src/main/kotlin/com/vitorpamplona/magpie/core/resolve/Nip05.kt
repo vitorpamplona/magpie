@@ -37,6 +37,8 @@ import java.net.UnknownHostException
 public sealed interface Nip05Answer {
     public data class Key(
         val pubKey: HexKey,
+        /** The relays `nostr.json` lists for the key: where its events can be found. */
+        val relays: List<String> = emptyList(),
     ) : Nip05Answer
 
     /** Definitely no key: the domain doesn't exist, has no `nostr.json` (404), or doesn't list the name. */
@@ -76,6 +78,12 @@ public class HttpNip05Resolver(
             .followSslRedirects(false)
             .build()
 
+    /** [domain] has no DNS record while its registrable domain has one: it definitely doesn't exist. */
+    private fun subdomainIsMissing(domain: String): Boolean {
+        val parent = registrableDomain(domain) ?: return false
+        return parent != domain && !resolves(domain) && resolves(parent)
+    }
+
     override suspend fun lookup(identifier: String): Nip05Answer {
         val id = Nip05Id.parse(identifier) ?: return Nip05Answer.Unreachable("not a NIP-05 identifier: $identifier")
         val base = baseUrlTemplate?.replace("{domain}", id.domain)?.trimEnd('/') ?: "https://${id.domain}"
@@ -95,29 +103,26 @@ public class HttpNip05Resolver(
                         else -> {
                             val bytes = response.body.byteStream().use { it.readNBytes(MAX_BODY + 1) }
                             if (bytes.size > MAX_BODY) return@use Nip05Answer.Unreachable("nostr.json at $url is larger than ${MAX_BODY / 1024} KB")
-                            val names =
+                            val info =
                                 try {
-                                    Nip05Parser().parse(bytes.decodeToString()).names
+                                    Nip05Parser().parse(bytes.decodeToString())
                                 } catch (e: Exception) {
                                     return@use Nip05Answer.Unreachable("unreadable nostr.json at $url")
                                 }
-                            names[id.name]
+                            info.names[id.name]
                                 ?.lowercase()
                                 ?.takeIf { it.length == 64 && it.all { c -> c in '0'..'9' || c in 'a'..'f' } }
-                                ?.let { Nip05Answer.Key(it) }
+                                ?.let { key -> Nip05Answer.Key(key, RelayUrls.clean(info.relays[key].orEmpty())) }
                                 ?: Nip05Answer.Absent
                         }
                     }
                 }
             } catch (e: UnknownHostException) {
-                val parent = registrableDomain(id.domain)
-                if (parent != null && parent != id.domain && resolves(parent)) {
-                    Nip05Answer.Absent
-                } else {
-                    Nip05Answer.Unreachable("DNS lookup for ${id.domain} failed")
-                }
+                if (subdomainIsMissing(id.domain)) Nip05Answer.Absent else Nip05Answer.Unreachable("DNS lookup for ${id.domain} failed")
             } catch (e: IOException) {
-                Nip05Answer.Unreachable("${e.javaClass.simpleName}: ${e.message} ($url)")
+                // Behind an HTTPS proxy the proxy resolves the name, so a missing subdomain comes
+                // back as a failed CONNECT, not UnknownHostException: ask DNS directly.
+                if (subdomainIsMissing(id.domain)) Nip05Answer.Absent else Nip05Answer.Unreachable("${e.javaClass.simpleName}: ${e.message} ($url)")
             }
         }
     }
@@ -136,6 +141,8 @@ public sealed interface VouchedKey {
     public data class Found(
         val identifier: String,
         val pubKey: HexKey,
+        /** The relays the domain lists for the key. */
+        val relays: List<String> = emptyList(),
     ) : VouchedKey
 
     /** Every candidate definitely has no key. */
@@ -154,7 +161,7 @@ public sealed interface VouchedKey {
 public suspend fun Nip05Resolver.vouch(identifiers: List<String>): VouchedKey {
     for (identifier in identifiers) {
         when (val answer = lookup(identifier)) {
-            is Nip05Answer.Key -> return VouchedKey.Found(identifier, answer.pubKey)
+            is Nip05Answer.Key -> return VouchedKey.Found(identifier, answer.pubKey, answer.relays)
             Nip05Answer.Absent -> continue
             is Nip05Answer.Unreachable -> return VouchedKey.Undecided(identifier, answer.reason)
         }

@@ -235,10 +235,30 @@ class ReleaseKeyTest {
     @Test
     fun aFailedDnsLookupIsOnlyAbsenceWhenTheParentDomainResolves() {
         // .invalid never resolves; whether that means "absent" depends on the parent check.
-        fun resolver(parentResolves: Boolean) = HttpNip05Resolver(Http.client(), "http://{domain}", resolves = { parentResolves }, registrableDomain = { "example.invalid" })
+        fun resolver(parentResolves: Boolean) = HttpNip05Resolver(Http.client(), "http://{domain}", resolves = { it == "example.invalid" && parentResolves }, registrableDomain = { "example.invalid" })
         runBlocking {
             assertEquals(Nip05Answer.Absent, resolver(parentResolves = true).lookup("releases@lib.example.invalid"))
             assertIs<Nip05Answer.Unreachable>(resolver(parentResolves = false).lookup("releases@lib.example.invalid"))
+        }
+    }
+
+    @Test
+    fun behindAProxyAMissingSubdomainIsStillAbsent() {
+        // A proxy reports a missing host as a failed connection, not UnknownHostException: here
+        // every request goes to a closed port, and only DNS can tell the cases apart.
+        val closed = java.net.ServerSocket(0).use { it.localPort }
+
+        fun resolver(subdomainResolves: Boolean) =
+            HttpNip05Resolver(
+                Http.client(),
+                "http://127.0.0.1:$closed/{domain}",
+                resolves = { it == "example.com" || subdomainResolves },
+                registrableDomain = { "example.com" },
+            )
+        runBlocking {
+            assertEquals(Nip05Answer.Absent, resolver(subdomainResolves = false).lookup("releases@lib.example.com"))
+            assertIs<Nip05Answer.Unreachable>(resolver(subdomainResolves = true).lookup("releases@lib.example.com"), "a subdomain that exists but can't be read")
+            assertIs<Nip05Answer.Unreachable>(resolver(subdomainResolves = false).lookup("releases@example.com"), "the registrable domain itself never counts as missing")
         }
     }
 

@@ -21,6 +21,7 @@
 package com.vitorpamplona.magpie.gradle
 
 import com.vitorpamplona.magpie.bridge.EngineConfig
+import org.gradle.api.GradleException
 import org.gradle.api.Plugin
 import org.gradle.api.artifacts.dsl.RepositoryHandler
 import org.gradle.api.artifacts.repositories.MavenArtifactRepository
@@ -71,12 +72,30 @@ class MagpieSettingsPlugin : Plugin<Settings> {
             return
         }
         val offline = settings.startParameter.isOffline
+        if (!offline && Runtime.version().feature() < MIN_DAEMON_JAVA) {
+            // Resolution checks signatures in this daemon with Quartz, which needs Java 21: on an
+            // older JVM it would fail on the first file instead of here.
+            throw GradleException(
+                "Magpie resolves in the Gradle daemon and needs Java $MIN_DAEMON_JAVA or newer; this daemon runs Java " +
+                    "${Runtime.version().feature()}. Run Gradle on Java $MIN_DAEMON_JAVA (JAVA_HOME, or org.gradle.java.home in " +
+                    "gradle.properties); your projects can still compile for older Java with a toolchain.",
+            )
+        }
+        if (ext.indexRelays.get().isEmpty()) {
+            // Without a domain there's no nostr.json to name the key's relays, so only an index relay can.
+            groups.filter { it.pin != MagpieGroup.DOMAIN && !it.pin.startsWith("nip05:") }.takeIf { it.isNotEmpty() }?.let { pinned ->
+                throw GradleException(
+                    "Magpie: ${pinned.joinToString { it.group }} trust${if (pinned.size == 1) "s" else ""} a key directly, and Magpie finds that key's " +
+                        "relays through its relay list (kind 10002) on index relays. Add magpie { indexRelays(\"wss://purplepag.es\") } (any relays that index relay lists).",
+                )
+            }
+        }
         val cacheRoot = ext.cacheDir.get().asFile
         val lockFile = if (ext.useLockFile.get()) ext.lockFile.get().asFile else null
 
         val config =
             buildMap {
-                put(EngineConfig.RELAYS, ext.relays.get().joinToString("\n"))
+                put(EngineConfig.INDEX_RELAYS, ext.indexRelays.get().joinToString("\n"))
                 put(EngineConfig.GROUPS, groups.joinToString("\n") { "${it.group}=${it.pin}" })
                 put(EngineConfig.FALLBACK_SERVERS, ext.fallbackServers.get().joinToString("\n"))
                 put(EngineConfig.CACHE_DIR, cacheRoot.absolutePath)
@@ -233,3 +252,6 @@ internal object Bech32 {
         return out.joinToString("") { "%02x".format(it) }
     }
 }
+
+/** The daemon's minimum Java version for resolving: Quartz's signature checks need Java 21. */
+private const val MIN_DAEMON_JAVA = 21

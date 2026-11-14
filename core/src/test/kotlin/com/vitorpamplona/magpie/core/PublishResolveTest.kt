@@ -20,6 +20,7 @@
  */
 package com.vitorpamplona.magpie.core
 
+import com.vitorpamplona.magpie.core.publish.ListSettings
 import com.vitorpamplona.magpie.core.publish.MissingServerListException
 import com.vitorpamplona.magpie.core.publish.VersionAlreadyReleasedException
 import com.vitorpamplona.magpie.core.resolve.RouterResponse
@@ -130,7 +131,7 @@ class PublishResolveTest {
                             group = "com.example",
                             version = "1.0.0",
                             rootArtifact = "lib",
-                            indexerRelays = listOf(world.relay.url),
+                            indexRelays = listOf(world.relay.url),
                         ),
                     )
                 }
@@ -302,7 +303,13 @@ class PublishResolveTest {
     @Test
     fun serverListTaskPublishesKind10063() {
         val (publisher, signer) = world.publisher(alice)
-        kotlinx.coroutines.runBlocking { publisher.createServerList(listOf(world.blossom.url), listOf(world.relay.url)) }
+        kotlinx.coroutines.runBlocking {
+            publisher.createServerList(
+                listOf(world.blossom.url),
+                com.vitorpamplona.magpie.core.publish
+                    .ListSettings(null, listOf(world.relay.url)),
+            )
+        }
         assertEquals(1, signer.signatures)
         world.publish(alice, repo().dir, "1.0.0")
     }

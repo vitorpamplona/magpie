@@ -63,12 +63,19 @@ are hard to reverse once releases exist.
    (`META-INF/magpie/engine/`), extracts them once to `~/.gradle/magpie/engine/<hash>/`, and loads
    them in a class loader that sees only the JDK and the bridge interfaces. Same isolation as
    shading, stronger for the stdlib, no bytecode rewriting. Cost: a 21 MB plugin jar (Quartz is
-   16 MB of it).
+   16 MB of it), and one engine in the daemon's metaspace per project that resolves through
+   Magpie: Gradle gives each project's settings their own plugin class loader, and the engine
+   stays loaded after the build (repeated builds of a project reuse it). A daemon that has
+   served many such projects can run short of metaspace, which Gradle handles by retiring it.
+   Open: one engine per daemon, behind a bridge of JDK types only, so it could be shared across
+   plugin class loaders.
 
 10. **The secp256k1 JNI.** Excluded from the daemon's engine; resolution verifies with Quartz's
     pure-Kotlin secp256k1. Publishing signs in a Gradle worker *process*, the only place the JNI
     loads. ACINQ's JNI 0.24.0 targets Java 21, so the worker uses a Java 21 toolchain when the
-    daemon runs on 17. Resolution itself runs on Java 17.
+    daemon runs on 17. Resolution needs a daemon on Java 21: Quartz's pure-Kotlin secp256k1 calls
+    `Math.unsignedMultiplyHigh` (Java 18), and current Quartz targets Java 21 outright. The
+    settings plugin says so at configuration on an older daemon.
 
 11. **When the server starts.** The repository URL is a provider; Gradle evaluates it when it
     first resolves a Magpie group, which can be during configuration-cache *storing*. No relay or
@@ -92,8 +99,8 @@ are hard to reverse once releases exist.
 
 14. **Minimum Gradle version.** 8.8: earlier versions generate no Kotlin DSL accessor for the
     `magpie { }` settings extension (8.6/8.7 can only use `configure<MagpieExtension> { }`). CI
-    runs the end-to-end tests on 8.8 with the daemon on JDK 17, on 8.14, and on 9.8.2 (the
-    repository's wrapper).
+    runs the end-to-end tests on 8.8, 8.14 and 9.8.2 (the repository's wrapper), and checks that
+    a daemon on JDK 17 fails at configuration with a hint.
 
 15. **Lock file writes.** The engine writes `gradle/magpie.lock` during resolution (one writer at
     a time, atomic replace). CI can freeze it (`-Pmagpie.frozenLock=true`): any new entry then
@@ -101,8 +108,10 @@ are hard to reverse once releases exist.
 
 ## Publishing
 
-16. **Where to publish.** The publisher's NIP-65 write relays plus `archivalRelays`; if both are
-    empty, the relays the build reads from. At least one relay must accept the event.
+16. **Where to publish.** The publisher's own relays (NIP-65 write relays and the relays its
+    domain's `nostr.json` lists for it) plus `archivalRelays`. A key with no relays of its own
+    goes to the index relays, because that is where consumers look for such a key. At least one
+    relay must accept the event.
 
 17. **Which servers go in `server` hints.** The servers that ended up holding every blob; if none
     holds all of them, every server that holds any.
@@ -116,6 +125,14 @@ are hard to reverse once releases exist.
     `magpie.partialsDir`. Close re-checks that every listed blob is on a server before signing.
 
 20. **Snapshot overwrite checks.** None: a snapshot is meant to be replaced.
+
+21. **No default relays.** Magpie ships no relay list: a default would make those relays
+    everyone's dependency. Each key's events live on its own relays (the outbox model), found
+    through its NIP-65 list on the `indexRelays` a build names, or through the `relays` its
+    domain's `nostr.json` lists. A group trusted through its domain can need no relay
+    configuration at all. Open: whether to also read NIP-05's `nip46` relays, and whether a
+    key's relay list should be pinned in the lock (today it is refreshed, since moving relays is
+    routine and the events are signed either way).
 
 ## Deferred (out of scope for v1)
 

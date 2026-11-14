@@ -27,8 +27,13 @@ public final class EngineConfig {
     public static final String ENGINE_CLASS = "com.vitorpamplona.magpie.core.engine.MagpieEngineImpl";
 
     // Resolution
-    /** Relays to query, newline-separated. */
-    public static final String RELAYS = "relays";
+    /**
+     * Index relays, newline-separated: where keys' NIP-65 relay lists (kind 10002) are looked up.
+     * Each key's events are then read from its own write relays and the relays its domain's
+     * nostr.json lists for it; these relays only when a key has neither. Publishing reads its own
+     * lists here too.
+     */
+    public static final String INDEX_RELAYS = "indexRelays";
     /**
      * {@code <group>=domain} (the group's domain vouches: {@code releases@<domain>}),
      * {@code <group>=nip05:<name@domain>} or {@code <group>=<npub|hex>}, newline-separated.
@@ -55,6 +60,7 @@ public final class EngineConfig {
     public static final String TASK_PUBLISH = "publish";
     public static final String TASK_CLOSE = "close";
     public static final String TASK_CREATE_SERVER_LIST = "createServerList";
+    public static final String TASK_CREATE_RELAY_LIST = "createRelayList";
 
     /** The local Maven repository maven-publish wrote ({@code build/magpie-repo}). */
     public static final String REPO_DIR = "repoDir";
@@ -64,8 +70,6 @@ public final class EngineConfig {
     public static final String VERSION = "version";
     /** Relays to publish to besides the publisher's NIP-65 write relays (archival relays). */
     public static final String PUBLISH_RELAYS = "publishRelays";
-    /** Relays to read the publisher's kind 10063 and 10002 from. */
-    public static final String INDEXER_RELAYS = "indexerRelays";
     /** NIP-46 bunker URI. Takes precedence over the nsec. */
     public static final String BUNKER_URI = "bunkerUri";
     /** nsec (or hex) secret key, from an environment variable. */
@@ -78,6 +82,8 @@ public final class EngineConfig {
     public static final String PARTIAL = "partial";
     /** Blossom servers for {@link #TASK_CREATE_SERVER_LIST}. */
     public static final String SERVERS = "servers";
+    /** createRelayList: the relays to list, newline-separated. */
+    public static final String LIST_RELAYS = "listRelays";
     /**
      * Which key the group's domain must vouch for before publishing: {@link #RELEASE_KEY_DOMAIN}
      * (default: {@code releases@} down the group's domain chain), a NIP-05 identifier on that

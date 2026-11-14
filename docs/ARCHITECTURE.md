@@ -11,7 +11,10 @@ publisher, and the optional gateway is the same resolver behind Ktor.
         │                                ▲                              ▲
         │ sign release (kind 3071)       │ GET /<sha256>                │ GET …/lib-1.0.jar
         ▼                                │                              │
-   relays (NIP-65 write + archival) ──── REQ #j #v, authors=[pinned] ── Gradle
+   the key's relays (NIP-65 write,  ──── REQ #j #v, authors=[pinned] ── Gradle
+   nostr.json, archival)                                                  │
+                                         kind 10002 of the key ◀──────────┘
+                                         on index relays + nostr.json relays
 ```
 
 ## Modules
@@ -51,7 +54,12 @@ BUD-02 authorization, BUD-06 preflight), which Quartz doesn't have as a client.
    - parses the path (`MavenPath`); unknown groups are 404;
    - finds the trusted key (`TrustPolicy`): by default `releases@<domain>` down the group's
      domain chain (`ReleaseIdentity`, `HttpNip05Resolver`), pinned in `gradle/magpie.lock`, where
-     a later change fails loudly; or a configured NIP-05 on those domains, or an npub;
+     a later change fails loudly; or a configured NIP-05 on those domains, or an npub. The
+     `relays` the domain's `nostr.json` lists for the key are kept (`RelayHints`, also on disk);
+   - finds the key's relays (`RelayQuery.relaysFor`, the outbox model): the write relays of its
+     newest kind 10002, looked up on the index relays and the `nostr.json` relays (10 min cache,
+     disk fallback), plus the `nostr.json` relays; the index relays only when both are empty.
+     Every query below goes to those relays;
    - for a file: finds the release (`Resolver.release`: disk cache → relays, honoring the lock,
      earliest wins) or the newest snapshot; fetches the manifest (content-addressed, cached
      forever); looks up the file; fetches the blob from the release's server hints, then the
@@ -75,6 +83,8 @@ BUD-02 authorization, BUD-06 preflight), which Quartz doesn't have as a client.
 | `events/<publisher>/<group>/<artifact>/<version>.json` | every candidate release seen for that version (each project selects with its own lock), or the latest snapshot | forever (snapshots: refreshed) |
 | `events/<publisher>/<group>/<artifact>/_module.json` | the last module listing, for offline metadata | refreshed every 30 s online |
 | `servers/<publisher>.json` | the publisher's kind 10063 | refreshed every 10 min online |
+| `relay-lists/<publisher>.json` | the publisher's kind 10002 | refreshed every 10 min online |
+| `nip05-relays/<publisher>.txt` | the relays its domain's `nostr.json` lists for it | replaced on every lookup |
 | `mirror/<publisher>/…` | Maven layout for `--offline` | grows as files are served |
 
 ## Publishing
@@ -85,8 +95,9 @@ runs in a worker process:
 1. `RepoScanner` hashes every file of the group and version (skipping Gradle's sidecars and
    `maven-metadata.xml`, keeping `.asc`) into a `Manifest`.
 2. `ReleaseKeyCheck` makes sure the group's domain names the signing key (`releases@` down the
-   domain chain), so no consumer will reject the release. Then the publisher's kind 10063 and
-   NIP-65 relays are read; no 10063 → a failure that names
+   domain chain), so no consumer will reject the release, and returns the relays `nostr.json`
+   lists for it. The publisher's kind 10002 is read from the index relays and those relays, then
+   its kind 10063 also from the write relays the 10002 names; no 10063 → a failure that names
    `createNostrServerList`.
 3. `ModuleChecker` makes sure every file each `.module` references (and every `available-at`
    module) is in the manifest.
@@ -97,8 +108,10 @@ runs in a worker process:
    signed**.
 6. One kind 24242 authorization covering every missing blob (and the manifest) is signed
    (signature 1) and used for every upload; a server that refuses it gets one per blob.
-7. The release is signed (signature 2) and published to the write and archival relays; at least
-   one must accept.
+7. The release is signed (signature 2) and published to the key's relays (write relays and the
+   `nostr.json` relays) and the archival relays; at least one must accept. A key with no relays
+   of its own is published to the index relays instead, where consumers then look, with a
+   warning that names `createNostrRelayList`.
 
 ### Multi-host Kotlin Multiplatform
 

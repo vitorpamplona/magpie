@@ -31,16 +31,22 @@ import javax.inject.Inject
  * `magpie { … }` in `settings.gradle.kts`:
  * ```
  * magpie {
- *     relays("wss://relay.example.com")
- *     group("com.example") { publisher("npub1…") }   // or { nip05() } for trust on first use
+ *     group("com.example")                            // releases@example.com vouches; its nostr.json lists the key's relays
+ *     indexRelays("wss://purplepag.es")               // needed for keys no domain lists relays for
+ *     group("org.other") { publisher("npub1…") }
  * }
  * ```
  */
 abstract class MagpieExtension
     @Inject
     constructor() {
-        /** Relays to read release events from. Results from all of them are merged. */
-        abstract val relays: ListProperty<String>
+        /**
+         * Index relays: where trusted keys' relay lists (kind 10002) are looked up. Each key's
+         * releases are read from its own write relays and from the relays its domain's
+         * nostr.json lists for it; from these only when a key has neither. Optional when every
+         * group is trusted through its domain and the domain lists relays for its key.
+         */
+        abstract val indexRelays: ListProperty<String>
 
         /** Blossom servers to try after a release's hints and its publisher's kind 10063. */
         abstract val fallbackServers: ListProperty<String>
@@ -65,8 +71,8 @@ abstract class MagpieExtension
 
         internal val groups = mutableListOf<MagpieGroup>()
 
-        fun relays(vararg urls: String) {
-            relays.addAll(urls.toList())
+        fun indexRelays(vararg urls: String) {
+            indexRelays.addAll(urls.toList())
         }
 
         fun fallbackServers(vararg urls: String) {
