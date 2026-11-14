@@ -139,13 +139,15 @@ class MagpiePublishPlugin : Plugin<Project> {
             if (name.startsWith("publish") && name.endsWith("ToMagpieLocalRepository")) dependsOn(clean)
         }
 
-        val rootArtifact =
-            ext.rootArtifact.orElse(
-                project.provider {
-                    val publications = publishing.publications.withType(MavenPublication::class.java)
-                    (publications.findByName("kotlinMultiplatform") ?: publications.firstOrNull())?.artifactId ?: project.name
-                },
-            )
+        // The coordinates are the root publication's, which a build may set without touching the
+        // project's group (Kotlin/Native names its klibs after the project's).
+        val rootPublication = {
+            val publications = publishing.publications.withType(MavenPublication::class.java)
+            publications.findByName("kotlinMultiplatform") ?: publications.firstOrNull()
+        }
+        val rootArtifact = ext.rootArtifact.orElse(project.provider { rootPublication()?.artifactId ?: project.name })
+        val rootGroup = project.provider { rootPublication()?.groupId ?: project.group.toString() }
+        val rootVersion = project.provider { rootPublication()?.version ?: project.version.toString() }
         val cacheRoot = File(project.gradle.gradleUserHomeDir, "magpie")
         val configure: (MagpieEngineTask) -> Unit = { task ->
             task.group = "publishing"
@@ -168,8 +170,8 @@ class MagpiePublishPlugin : Plugin<Project> {
             dependsOn("publishAllPublicationsToMagpieLocalRepository")
             engineTask.set(EngineConfig.TASK_PUBLISH)
             this.repoDir.set(repoDir)
-            groupId.set(project.provider { project.group.toString() })
-            version.set(project.provider { project.version.toString() })
+            groupId.set(rootGroup)
+            version.set(rootVersion)
             artifactId.set(rootArtifact)
             partialsDir.set(ext.partialsDir)
             partialName.set(project.provider { System.getProperty("os.name").lowercase().replace(' ', '-') + "-" + System.getProperty("os.arch") })
@@ -178,8 +180,8 @@ class MagpiePublishPlugin : Plugin<Project> {
             configure(this)
             description = "Merges the partial manifests of a multi-host publish, checks every .module reference, and signs the release."
             engineTask.set(EngineConfig.TASK_CLOSE)
-            groupId.set(project.provider { project.group.toString() })
-            version.set(project.provider { project.version.toString() })
+            groupId.set(rootGroup)
+            version.set(rootVersion)
             artifactId.set(rootArtifact)
             partialsDir.set(ext.partialsDir)
         }

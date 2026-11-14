@@ -90,7 +90,8 @@ class KmpEndToEndTest {
                 ${if (android) "id(\"com.android.kotlin.multiplatform.library\") version \"9.5.0\"" else ""}
                 id("com.vitorpamplona.magpie.publish") version "${System.getProperty("magpie.version")}"
             }
-            group = "com.example"
+            // On the publications, not the project: Magpie must take the coordinates from them.
+            publishing.publications.withType<MavenPublication>().configureEach { groupId = "com.example" }
             version = "$version"
             kotlin {
                 ${targetBlock()}
