@@ -35,6 +35,7 @@ import com.vitorpamplona.magpie.core.publish.SecretKeySigner
 import com.vitorpamplona.magpie.core.resolve.HttpNip05Resolver
 import com.vitorpamplona.magpie.core.resolve.LocalRepoServer
 import com.vitorpamplona.magpie.core.util.MagpieLog
+import com.vitorpamplona.magpie.core.util.QuartzLogs
 import kotlinx.coroutines.runBlocking
 import java.io.File
 
@@ -72,6 +73,7 @@ public class MagpieEngineImpl : MagpieEngine {
         logger: EngineLogger,
     ): ResolverHandle {
         val log = BridgeLog(logger)
+        QuartzLogs.routeTo(log)
         val stack = ResolverStack.create(config, log)
         val server = LocalRepoServer(stack.router, log, LocalRepoServer.preferredPortFor(stack.cacheDir.absolutePath), stack.configId)
         log.info(
@@ -102,6 +104,7 @@ public class MagpieEngineImpl : MagpieEngine {
         logger: EngineLogger,
     ): Map<String, String> {
         val log = BridgeLog(logger)
+        QuartzLogs.routeTo(log)
         val http = Http.client()
         val nostr = QuartzNostrIO(http, log)
         try {
