@@ -37,7 +37,7 @@ import javax.inject.Inject
  * `magpie { … }` in a published project's `build.gradle.kts`:
  * ```
  * magpie {
- *     relays("wss://relay.example.com")          // where to read your kind 10063 / 10002
+ *     relays("wss://relay.example.com")          // where to read your kind 10063 / 10002 (or -Pmagpie.relays=…)
  *     archivalRelays("wss://archive.example.com") // published to besides your NIP-65 write relays
  *     signer { bunkerEnv.set("MAGPIE_BUNKER") }   // the default; or nsecEnv
  * }
@@ -109,6 +109,20 @@ class MagpiePublishPlugin : Plugin<Project> {
         val ext = project.extensions.create("magpie", MagpiePublishExtension::class.java)
         ext.partialsDir.convention(project.layout.buildDirectory.dir("magpie/partials"))
         ext.verifyReleaseKey.convention(true)
+        // Also settable as Gradle properties (comma-separated), so a build can apply the plugin
+        // only for releases without naming its types in the build script.
+        ext.relays.convention(
+            project.providers
+                .gradleProperty("magpie.relays")
+                .map { list(it) }
+                .orElse(emptyList()),
+        )
+        ext.archivalRelays.convention(
+            project.providers
+                .gradleProperty("magpie.archivalRelays")
+                .map { list(it) }
+                .orElse(emptyList()),
+        )
         val repoDir = project.layout.buildDirectory.dir("magpie-repo")
         val publishing = project.extensions.getByType(PublishingExtension::class.java)
         publishing.repositories.maven {
@@ -125,13 +139,15 @@ class MagpiePublishPlugin : Plugin<Project> {
             if (name.startsWith("publish") && name.endsWith("ToMagpieLocalRepository")) dependsOn(clean)
         }
 
-        val rootArtifact =
-            ext.rootArtifact.orElse(
-                project.provider {
-                    val publications = publishing.publications.withType(MavenPublication::class.java)
-                    (publications.findByName("kotlinMultiplatform") ?: publications.firstOrNull())?.artifactId ?: project.name
-                },
-            )
+        // The coordinates are the root publication's, which a build may set without touching the
+        // project's group (Kotlin/Native names its klibs after the project's).
+        val rootPublication = {
+            val publications = publishing.publications.withType(MavenPublication::class.java)
+            publications.findByName("kotlinMultiplatform") ?: publications.firstOrNull()
+        }
+        val rootArtifact = ext.rootArtifact.orElse(project.provider { rootPublication()?.artifactId ?: project.name })
+        val rootGroup = project.provider { rootPublication()?.groupId ?: project.group.toString() }
+        val rootVersion = project.provider { rootPublication()?.version ?: project.version.toString() }
         val cacheRoot = File(project.gradle.gradleUserHomeDir, "magpie")
         val configure: (MagpieEngineTask) -> Unit = { task ->
             task.group = "publishing"
@@ -154,8 +170,8 @@ class MagpiePublishPlugin : Plugin<Project> {
             dependsOn("publishAllPublicationsToMagpieLocalRepository")
             engineTask.set(EngineConfig.TASK_PUBLISH)
             this.repoDir.set(repoDir)
-            groupId.set(project.provider { project.group.toString() })
-            version.set(project.provider { project.version.toString() })
+            groupId.set(rootGroup)
+            version.set(rootVersion)
             artifactId.set(rootArtifact)
             partialsDir.set(ext.partialsDir)
             partialName.set(project.provider { System.getProperty("os.name").lowercase().replace(' ', '-') + "-" + System.getProperty("os.arch") })
@@ -164,8 +180,8 @@ class MagpiePublishPlugin : Plugin<Project> {
             configure(this)
             description = "Merges the partial manifests of a multi-host publish, checks every .module reference, and signs the release."
             engineTask.set(EngineConfig.TASK_CLOSE)
-            groupId.set(project.provider { project.group.toString() })
-            version.set(project.provider { project.version.toString() })
+            groupId.set(rootGroup)
+            version.set(rootVersion)
             artifactId.set(rootArtifact)
             partialsDir.set(ext.partialsDir)
         }
@@ -176,3 +192,6 @@ class MagpiePublishPlugin : Plugin<Project> {
         }
     }
 }
+
+/** A comma-separated Gradle property as a list. */
+private fun list(value: String): List<String> = value.split(',').map { it.trim() }.filter { it.isNotEmpty() }
