@@ -63,7 +63,12 @@ are hard to reverse once releases exist.
    (`META-INF/magpie/engine/`), extracts them once to `~/.gradle/magpie/engine/<hash>/`, and loads
    them in a class loader that sees only the JDK and the bridge interfaces. Same isolation as
    shading, stronger for the stdlib, no bytecode rewriting. Cost: a 21 MB plugin jar (Quartz is
-   16 MB of it).
+   16 MB of it), and one engine in the daemon's metaspace per project that resolves through
+   Magpie: Gradle gives each project's settings their own plugin class loader, and the engine
+   stays loaded after the build (repeated builds of a project reuse it). A daemon that has
+   served many such projects can run short of metaspace, which Gradle handles by retiring it.
+   Open: one engine per daemon, behind a bridge of JDK types only, so it could be shared across
+   plugin class loaders.
 
 10. **The secp256k1 JNI.** Excluded from the daemon's engine; resolution verifies with Quartz's
     pure-Kotlin secp256k1. Publishing signs in a Gradle worker *process*, the only place the JNI
