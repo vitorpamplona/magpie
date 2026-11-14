@@ -87,6 +87,10 @@ class Builds : AutoCloseable {
         File(System.getProperty("user.home"), ".gradle/init.d").listFiles()?.forEach { script ->
             script.copyTo(File(testKitDir, "init.d/${script.name}"), overwrite = true)
         }
+        // Every test is a new project, so the shared test daemon keeps one Magpie engine per test
+        // (plus the Android and Kotlin plugins of each): more metaspace than Gradle's default
+        // 384 MB, which the Android plugin's lint service hit mid-build on CI.
+        File(testKitDir, "gradle.properties").apply { parentFile.mkdirs() }.writeText("org.gradle.jvmargs=-Xmx1g -XX:MaxMetaspaceSize=1g\n")
         relay.add(
             publisher.sign(EventTemplate<Event>(1000, MagpieSpec.KIND_BLOSSOM_SERVERS, arrayOf(arrayOf("server", blossom.url)), "")),
             publisher.sign(EventTemplate<Event>(1000, MagpieSpec.KIND_RELAY_LIST, arrayOf(arrayOf("r", relay.url)), "")),
