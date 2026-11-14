@@ -16,7 +16,7 @@ each consumer pins the groups it uses to a publisher key. No relay or server is 
 - A multi-host Kotlin Multiplatform release (Linux + macOS CI) is signed once, after every host's
   files are in and every `.module` reference checks out.
 
-Status: `0.1.0-SNAPSHOT`. Event kinds and tag letters are placeholders until the NIP is assigned
+Status: `0.1.0`, the first release. Event kinds and tag letters are the draft NIP's until it is assigned
 (see [docs/NIP-DRAFT.md](docs/NIP-DRAFT.md)).
 
 ## Use a library published with Magpie
