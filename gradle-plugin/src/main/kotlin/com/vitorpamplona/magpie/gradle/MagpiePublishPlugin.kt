@@ -37,7 +37,7 @@ import javax.inject.Inject
  * `magpie { … }` in a published project's `build.gradle.kts`:
  * ```
  * magpie {
- *     relays("wss://relay.example.com")          // where to read your kind 10063 / 10002
+ *     relays("wss://relay.example.com")          // where to read your kind 10063 / 10002 (or -Pmagpie.relays=…)
  *     archivalRelays("wss://archive.example.com") // published to besides your NIP-65 write relays
  *     signer { bunkerEnv.set("MAGPIE_BUNKER") }   // the default; or nsecEnv
  * }
@@ -109,6 +109,20 @@ class MagpiePublishPlugin : Plugin<Project> {
         val ext = project.extensions.create("magpie", MagpiePublishExtension::class.java)
         ext.partialsDir.convention(project.layout.buildDirectory.dir("magpie/partials"))
         ext.verifyReleaseKey.convention(true)
+        // Also settable as Gradle properties (comma-separated), so a build can apply the plugin
+        // only for releases without naming its types in the build script.
+        ext.relays.convention(
+            project.providers
+                .gradleProperty("magpie.relays")
+                .map { list(it) }
+                .orElse(emptyList()),
+        )
+        ext.archivalRelays.convention(
+            project.providers
+                .gradleProperty("magpie.archivalRelays")
+                .map { list(it) }
+                .orElse(emptyList()),
+        )
         val repoDir = project.layout.buildDirectory.dir("magpie-repo")
         val publishing = project.extensions.getByType(PublishingExtension::class.java)
         publishing.repositories.maven {
@@ -176,3 +190,6 @@ class MagpiePublishPlugin : Plugin<Project> {
         }
     }
 }
+
+/** A comma-separated Gradle property as a list. */
+private fun list(value: String): List<String> = value.split(',').map { it.trim() }.filter { it.isNotEmpty() }
