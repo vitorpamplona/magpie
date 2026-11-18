@@ -91,6 +91,7 @@ abstract class MagpieEngineTask : DefaultTask() {
         val config =
             buildMap {
                 put(EngineConfig.INDEX_RELAYS, indexRelays.get().joinToString("\n"))
+                put(EngineConfig.CACHE_DIR, cacheRoot.get().asFile.absolutePath)
                 put(EngineConfig.GROUP, groupId.get())
                 put(EngineConfig.RELEASE_KEY_CHECK, releaseKeyCheck.get())
                 nip05BaseUrl.orNull?.let { put(EngineConfig.NIP05_BASE_URL, it) }
