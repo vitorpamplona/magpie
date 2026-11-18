@@ -123,6 +123,8 @@ host's klibs fail here), upload the manifest, sign once.
 ### Signers
 
 `MAGPIE_BUNKER` (a NIP-46 `bunker://` URI; the key never touches CI) wins over `MAGPIE_NSEC`.
+The NIP-46 client key is kept in Magpie's cache (`bunker-clients/<bunker pubkey>.key`, owner-only),
+so every task and build on a machine is the client the bunker already paired with.
 Both are read from the environment when the task runs, never stored in the configuration cache.
 
 ## Class loading in the Gradle daemon
