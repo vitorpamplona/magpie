@@ -20,11 +20,14 @@
  */
 package com.vitorpamplona.magpie.core.publish
 
+import com.vitorpamplona.crypto.sha2.sha256
 import com.vitorpamplona.magpie.core.nostr.NostrIO
+import com.vitorpamplona.magpie.core.util.Files2
 import com.vitorpamplona.magpie.core.util.MagpieLog
 import com.vitorpamplona.magpie.spec.MagpieEvents
 import com.vitorpamplona.quartz.nip01Core.core.Event
 import com.vitorpamplona.quartz.nip01Core.core.HexKey
+import com.vitorpamplona.quartz.nip01Core.core.toHexKey
 import com.vitorpamplona.quartz.nip01Core.crypto.KeyPair
 import com.vitorpamplona.quartz.nip01Core.signers.EventTemplate
 import com.vitorpamplona.quartz.nip01Core.signers.NostrSigner
@@ -33,6 +36,11 @@ import com.vitorpamplona.quartz.nip19Bech32.decodePrivateKeyAsHexOrNull
 import com.vitorpamplona.quartz.nip46RemoteSigner.signer.NostrSignerRemote
 import com.vitorpamplona.quartz.utils.Hex
 import kotlinx.coroutines.withTimeout
+import java.io.File
+import java.io.IOException
+import java.nio.file.FileAlreadyExistsException
+import java.nio.file.Files
+import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -91,7 +99,11 @@ public class SecretKeySigner(
 
 /**
  * Signs through a NIP-46 bunker (`bunker://<remote>?relay=…&secret=…`): the key never leaves the
- * bunker, which is what CI should use. A throwaway local key encrypts the conversation.
+ * bunker, which is what CI should use. A local client key encrypts the conversation. With
+ * [clientKeyFile] it is kept there and reused, so every task of a build (each in its own worker,
+ * one per published project) and every later build on the machine is the client the bunker
+ * already paired with: one connection approval, not one per task. Without it the key is
+ * throwaway.
  */
 public class BunkerSigner(
     bunkerUri: String,
@@ -99,11 +111,12 @@ public class BunkerSigner(
     private val log: MagpieLog,
     // Longer than Quartz's own request window (65 s, a 2 s pause, one retry of 65 s).
     private val timeoutMs: Long = 150_000,
+    clientKeyFile: File? = null,
 ) : MagpieSigner {
     private val remote =
         NostrSignerRemote.fromBunkerUri(
             bunkerUri = bunkerUri,
-            signer = NostrSignerInternal(KeyPair()),
+            signer = NostrSignerInternal(clientKey(clientKeyFile, log)),
             client = nostr.client,
             onAuthUrl = { url -> log.lifecycle("The bunker asks you to approve this request: $url") },
         )
@@ -134,5 +147,76 @@ public class BunkerSigner(
 
     override fun close() {
         remote.closeSubscription()
+    }
+
+    public companion object {
+        /** Where the client key for [bunkerUri]'s bunker lives under Magpie's [cacheDir]. */
+        public fun clientKeyFile(
+            cacheDir: File,
+            bunkerUri: String,
+        ): File {
+            val remote = bunkerUri.substringAfter("://").substringBefore('?').lowercase()
+            val name = if (remote.length == 64 && remote.all { it in '0'..'9' || it in 'a'..'f' }) remote else sha256(bunkerUri.encodeToByteArray()).toHexKey()
+            return File(File(cacheDir, "bunker-clients"), "$name.key")
+        }
+
+        /**
+         * The client key in [file], made when it is missing or unreadable. The key is written to
+         * a temp file only its owner can read and linked into place, which fails if another task
+         * got there first: racing tasks all end up on the key the file holds.
+         */
+        internal fun clientKey(
+            file: File?,
+            log: MagpieLog,
+        ): KeyPair {
+            if (file == null) return KeyPair()
+            read(file)?.let { return it }
+            Files2.ensureDir(file.parentFile)
+            val fresh = KeyPair()
+            val tmp = ownerOnlyTempFile(file.parentFile, log)
+            try {
+                tmp.writeText(fresh.privKey!!.toHexKey())
+                // A file that holds no key (corrupt, truncated) is replaced.
+                if (file.exists() && read(file) == null && !file.delete()) log.warn("Magpie: could not replace the unreadable $file")
+                try {
+                    Files.createLink(file.toPath(), tmp.toPath())
+                } catch (e: FileAlreadyExistsException) {
+                    // Another task made it first: use its key.
+                } catch (e: UnsupportedOperationException) {
+                    Files2.moveAtomically(tmp, file)
+                } catch (e: IOException) {
+                    // No hard links on this file system.
+                    Files2.moveAtomically(tmp, file)
+                }
+            } finally {
+                if (tmp.exists() && !tmp.delete()) tmp.deleteOnExit()
+            }
+            return read(file) ?: fresh
+        }
+
+        private fun ownerOnlyTempFile(
+            dir: File,
+            log: MagpieLog,
+        ): File =
+            try {
+                Files.createTempFile(dir.toPath(), "client", ".tmp", PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"))).toFile()
+            } catch (e: UnsupportedOperationException) {
+                // Not POSIX (Windows): restrict it before anything is written.
+                File.createTempFile("client", ".tmp", dir).also { tmp ->
+                    val ownerOnly =
+                        tmp.setReadable(false, false) &&
+                            tmp.setReadable(true, true) &&
+                            tmp.setWritable(false, false) &&
+                            tmp.setWritable(true, true)
+                    if (!ownerOnly) log.warn("Magpie: could not make $tmp readable by its owner only")
+                }
+            }
+
+        private fun read(file: File): KeyPair? {
+            if (!file.isFile) return null
+            val hex = file.readText().trim()
+            if (hex.length != 64 || !hex.all { it in '0'..'9' || it in 'a'..'f' }) return null
+            return runCatching { KeyPair(Hex.decode(hex)) }.getOrNull()
+        }
     }
 }

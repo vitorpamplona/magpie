@@ -12,7 +12,7 @@ publisher.
         │ sign release (kind 3071)       │ GET /<sha256>                │ GET …/lib-1.0.jar
         ▼                                │                              │
    the key's relays (NIP-65 write,  ──── REQ #j #v, authors=[pinned] ── Gradle
-   nostr.json, archival)                                                  │
+   nostr.json)                                                            │
                                          kind 10002 of the key ◀──────────┘
                                          on index relays + nostr.json relays
 ```
@@ -108,7 +108,7 @@ runs in a worker process:
 6. One kind 24242 authorization covering every missing blob (and the manifest) is signed
    (signature 1) and used for every upload; a server that refuses it gets one per blob.
 7. The release is signed (signature 2) and published to the key's relays (write relays and the
-   `nostr.json` relays) and the archival relays; at least one must accept. A key with no relays
+   `nostr.json` relays), where consumers read it; at least one must accept. A key with no relays
    of its own is published to the index relays instead, where consumers then look, with a
    warning that names `createNostrRelayList`.
 
@@ -123,6 +123,8 @@ host's klibs fail here), upload the manifest, sign once.
 ### Signers
 
 `MAGPIE_BUNKER` (a NIP-46 `bunker://` URI; the key never touches CI) wins over `MAGPIE_NSEC`.
+The NIP-46 client key is kept in Magpie's cache (`bunker-clients/<bunker pubkey>.key`, owner-only),
+so every task and build on a machine is the client the bunker already paired with.
 Both are read from the environment when the task runs, never stored in the configuration cache.
 
 ## Class loading in the Gradle daemon

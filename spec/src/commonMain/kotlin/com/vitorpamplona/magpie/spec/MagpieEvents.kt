@@ -21,157 +21,131 @@
 package com.vitorpamplona.magpie.spec
 
 import com.vitorpamplona.quartz.nip01Core.core.Event
-import com.vitorpamplona.quartz.nip01Core.core.HexKey
 import com.vitorpamplona.quartz.nip01Core.core.TagArray
 import com.vitorpamplona.quartz.nip01Core.signers.EventTemplate
+import com.vitorpamplona.quartz.nipFCMavenRepositories.MavenModule
+import com.vitorpamplona.quartz.nipFCMavenRepositories.MavenPublication
+import com.vitorpamplona.quartz.nipFCMavenRepositories.release.MavenReleaseEvent
+import com.vitorpamplona.quartz.nipFCMavenRepositories.snapshot.MavenSnapshotEvent
+import com.vitorpamplona.quartz.nipFCMavenRepositories.tags.ManifestTag
 
-/** The manifest blob an event pins. */
-public data class ManifestPointer(
-    val sha256: String,
-    val size: Long,
-)
+/*
+ * The event classes are Quartz's (nipFCMavenRepositories: MavenReleaseEvent, MavenSnapshotEvent,
+ * ManifestTag). What stays here is Magpie's side of them: which artifact hashes a release lists and
+ * the size budget that trims them, and the stricter checks a resolver applies before it uses an
+ * event to build file paths.
+ */
+
+/** [module] as Quartz's NIP-FC type. */
+public fun ModuleId.toMavenModule(): MavenModule = MavenModule(group, artifact)
+
+/** Every module the event covers that is safe as a path, root first. */
+public fun MavenPublication.moduleIds(): List<ModuleId> = moduleKeys().mapNotNull { ModuleId.parseOrNull(it) }
+
+/** The root coordinate, when it is safe as a path. */
+public fun MavenPublication.rootCoordinate(): Coordinate? {
+    val root = coordinate() ?: return null
+    if (!isValidGroup(root.groupId) || !isValidSegment(root.artifactId) || !isValidSegment(root.version)) return null
+    return Coordinate(root.groupId, root.artifactId, root.version)
+}
 
 /**
- * A release or a snapshot: an event that pins a manifest for a version of one or more modules.
- * Readers only; nothing here trusts the content before [com.vitorpamplona.magpie.spec.WinnerSelection]
- * and a signature check.
+ * Whether this event is a candidate for [module] at [version]: its version (the first `v`, as
+ * [MavenPublication.version] reads it) is [version] and a `j` names [module]. A later `v` claims
+ * nothing; Quartz 2.19.0's [MavenPublication.covers] accepts any `v`, so it is not used here.
  */
-public abstract class MagpiePublicationEvent(
-    id: HexKey,
-    pubKey: HexKey,
-    createdAt: Long,
-    kind: Int,
-    tags: TagArray,
-    content: String,
-    sig: HexKey,
-) : Event(id, pubKey, createdAt, kind, tags, content, sig) {
-    // Tags are read once: selection calls these accessors for every event, many times.
-    private val parsedModuleKeys: List<String> by lazy { tags.values(MagpieSpec.TAG_MODULE) }
-    private val parsedModules: List<ModuleId> by lazy { parsedModuleKeys.mapNotNull { ModuleId.parseOrNull(it) } }
-    private val parsedVersion: String? by lazy { tags.firstValue(MagpieSpec.TAG_VERSION) }
-    private val parsedManifest: ManifestPointer? by lazy {
-        val tag = tags.firstOrNull { it.size >= 2 && it[0] == MagpieSpec.TAG_MANIFEST }
-        val sha = tag?.get(1)?.lowercase()
-        if (tag == null || sha == null || !isSha256Hex(sha)) null else ManifestPointer(sha, tag.getOrNull(2)?.toLongOrNull() ?: -1)
-    }
+public fun MavenPublication.coversExactly(
+    module: MavenModule,
+    version: String,
+): Boolean = version() == version && module.key in moduleKeys()
 
-    /** Module keys (`group:artifact`) the event covers, root first. */
-    public fun moduleKeys(): List<String> = parsedModuleKeys
+/** [coversExactly] for Magpie's [ModuleId]. */
+public fun MavenPublication.covers(
+    module: ModuleId,
+    version: String,
+): Boolean = coversExactly(module.toMavenModule(), version)
 
-    public fun modules(): List<ModuleId> = parsedModules
-
-    public fun version(): String? = parsedVersion
-
-    /** The root coordinate: the first module at [version]. */
-    public fun coordinate(): Coordinate? {
-        val module = parsedModules.firstOrNull() ?: return null
-        val version = parsedVersion ?: return null
-        return runCatching { module.withVersion(version) }.getOrNull()
-    }
-
-    public fun covers(
-        module: ModuleId,
-        version: String,
-    ): Boolean = parsedVersion == version && module.key in parsedModuleKeys
-
-    /** The manifest pointer; size -1 when the tag doesn't give a usable one. */
-    public fun manifest(): ManifestPointer? = parsedManifest
-
-    /** Every `x` hash: the manifest and the primary artifacts. */
-    public fun hashes(): List<String> = tags.values(MagpieSpec.TAG_HASH)
-
-    /** Blossom server base URLs the publisher uploaded to. */
-    public fun servers(): List<String> = tags.values(MagpieSpec.TAG_SERVER)
-
-    /** Structurally valid: has modules, a version, and a manifest with a plausible size. */
-    public open fun isWellFormed(): Boolean =
-        modules().isNotEmpty() &&
-            version() != null &&
-            manifest()?.size?.let { it in 0..MagpieSpec.MAX_MANIFEST_BYTES } == true &&
-            coordinate() != null
+/**
+ * NIP-FC's [MavenPublication.isWellFormed] plus what Magpie needs before it trusts the event with
+ * a path or a download: a root coordinate Maven accepts as a path, and a manifest no larger than
+ * [MagpieSpec.MAX_MANIFEST_BYTES].
+ */
+public fun MavenPublication.isUsable(): Boolean {
+    if (!isWellFormed()) return false
+    val size = manifest()?.size ?: return false
+    return size <= MagpieSpec.MAX_MANIFEST_BYTES && rootCoordinate() != null
 }
 
-/** A regular, immutable release. */
-public class MagpieReleaseEvent(
-    id: HexKey,
-    pubKey: HexKey,
-    createdAt: Long,
-    tags: TagArray,
-    content: String,
-    sig: HexKey,
-) : MagpiePublicationEvent(id, pubKey, createdAt, KIND, tags, content, sig) {
-    override fun isWellFormed(): Boolean = super.isWellFormed() && version()?.let { !isSnapshotVersion(it) } == true
-
-    public companion object {
-        public const val KIND: Int = MagpieSpec.KIND_RELEASE
-
-        /**
-         * The unsigned release of [manifest]. [primaryHashes] are the hashes of jars, aars, klibs,
-         * POMs and Gradle module files, so a `#x` lookup finds who signed a file; they're dropped
-         * from the end if the event would pass [MagpieSpec.MAX_EVENT_BYTES].
-         */
-        public fun build(
-            manifest: Manifest,
-            manifestSha256: String = manifest.sha256Hex(),
-            manifestSize: Long = manifest.toBytes().size.toLong(),
-            primaryHashes: List<String> = primaryHashesOf(manifest),
-            servers: List<String> = emptyList(),
-            createdAt: Long,
-        ): EventTemplate<MagpieReleaseEvent> {
-            require(!manifest.coordinate.isSnapshot) { "A release can't be a -SNAPSHOT; publish it as a snapshot" }
-            return EventTemplate(
-                createdAt,
-                KIND,
-                publicationTags(manifest, manifestSha256, manifestSize, primaryHashes, servers, dTag = null, label = "Release"),
-                "",
-            )
+/** Wraps a generic event from a relay in its NIP-FC class, or null for other kinds. */
+public object MagpieEvents {
+    public fun wrap(event: Event): Event? =
+        when (event.kind) {
+            MavenReleaseEvent.KIND ->
+                event as? MavenReleaseEvent
+                    ?: MavenReleaseEvent(event.id, event.pubKey, event.createdAt, event.tags, event.content, event.sig)
+            MavenSnapshotEvent.KIND ->
+                event as? MavenSnapshotEvent
+                    ?: MavenSnapshotEvent(event.id, event.pubKey, event.createdAt, event.tags, event.content, event.sig)
+            else -> null
         }
+
+    /**
+     * The unsigned release of [manifest]. The primary artifacts' hashes follow the manifest's
+     * ([primaryHashesOf]), dropped from the end if the event would pass [MagpieSpec.MAX_EVENT_BYTES].
+     */
+    public fun release(
+        manifest: Manifest,
+        manifestSha256: String = manifest.sha256Hex(),
+        manifestSize: Long = manifest.toBytes().size.toLong(),
+        primaryHashes: List<String> = primaryHashesOf(manifest),
+        servers: List<String> = emptyList(),
+        createdAt: Long,
+    ): EventTemplate<MavenReleaseEvent> {
+        require(!manifest.coordinate.isSnapshot) { "A release can't be a -SNAPSHOT; publish it as a snapshot" }
+        val pointer = ManifestTag(manifestSha256, manifestSize)
+        val modules = manifest.modules().map { it.toMavenModule() }
+        val version = manifest.coordinate.version
+        val base = MavenReleaseEvent.build(modules, version, pointer, servers = servers, createdAt = createdAt)
+        val hashes = withinBudget(base.tags, primaryHashes, manifestSha256)
+        return MavenReleaseEvent.build(modules, version, pointer, hashes, servers, createdAt)
     }
-}
 
-/** An addressable snapshot: the newest one for its `d` tag replaces older ones. */
-public class MagpieSnapshotEvent(
-    id: HexKey,
-    pubKey: HexKey,
-    createdAt: Long,
-    tags: TagArray,
-    content: String,
-    sig: HexKey,
-) : MagpiePublicationEvent(id, pubKey, createdAt, KIND, tags, content, sig) {
-    public fun dTag(): String? = tags.firstValue(MagpieSpec.TAG_D)
+    /** The unsigned snapshot of [manifest], with the same hash budget as [release]. */
+    public fun snapshot(
+        manifest: Manifest,
+        manifestSha256: String = manifest.sha256Hex(),
+        manifestSize: Long = manifest.toBytes().size.toLong(),
+        primaryHashes: List<String> = primaryHashesOf(manifest),
+        servers: List<String> = emptyList(),
+        createdAt: Long,
+    ): EventTemplate<MavenSnapshotEvent> {
+        require(manifest.coordinate.isSnapshot) { "A snapshot needs a -SNAPSHOT version" }
+        val pointer = ManifestTag(manifestSha256, manifestSize)
+        val modules = manifest.modules().map { it.toMavenModule() }
+        val version = manifest.coordinate.version
+        val base = MavenSnapshotEvent.build(modules, version, pointer, servers = servers, createdAt = createdAt)
+        val hashes = withinBudget(base.tags, primaryHashes, manifestSha256)
+        return MavenSnapshotEvent.build(modules, version, pointer, hashes, servers, createdAt)
+    }
 
-    override fun isWellFormed(): Boolean =
-        super.isWellFormed() &&
-            version()?.let { isSnapshotVersion(it) } == true &&
-            dTag() == coordinate()?.toString()
-
-    public companion object {
-        public const val KIND: Int = MagpieSpec.KIND_SNAPSHOT
-
-        public fun build(
-            manifest: Manifest,
-            manifestSha256: String = manifest.sha256Hex(),
-            manifestSize: Long = manifest.toBytes().size.toLong(),
-            primaryHashes: List<String> = primaryHashesOf(manifest),
-            servers: List<String> = emptyList(),
-            createdAt: Long,
-        ): EventTemplate<MagpieSnapshotEvent> {
-            require(manifest.coordinate.isSnapshot) { "A snapshot needs a -SNAPSHOT version" }
-            return EventTemplate(
-                createdAt,
-                KIND,
-                publicationTags(
-                    manifest,
-                    manifestSha256,
-                    manifestSize,
-                    primaryHashes,
-                    servers,
-                    dTag = manifest.coordinate.toString(),
-                    label = "Snapshot",
-                ),
-                "",
-            )
+    /** The prefix of [hashes] that fits in [MagpieSpec.MAX_EVENT_BYTES] beside [baseTags]. */
+    private fun withinBudget(
+        baseTags: TagArray,
+        hashes: List<String>,
+        manifestSha256: String,
+    ): List<String> {
+        // Envelope: id, pubkey, sig, created_at, kind and punctuation, about 250 bytes.
+        var size = 250 + baseTags.sumOf { tagJsonSize(it) }
+        require(size <= MagpieSpec.MAX_EVENT_BYTES) { "Release event would exceed ${MagpieSpec.MAX_EVENT_BYTES} bytes before any artifact hash" }
+        val kept = mutableListOf<String>()
+        for (hash in hashes.map { it.lowercase() }.distinct()) {
+            if (hash == manifestSha256.lowercase()) continue
+            val extra = tagJsonSize(arrayOf(MagpieSpec.TAG_HASH, hash))
+            if (size + extra > MagpieSpec.MAX_EVENT_BYTES) break
+            kept += hash
+            size += extra
         }
+        return kept
     }
 }
 
@@ -205,57 +179,4 @@ public fun isPrimaryFile(file: MavenPath.ArtifactFile): Boolean =
         else -> false
     }
 
-private fun publicationTags(
-    manifest: Manifest,
-    manifestSha256: String,
-    manifestSize: Long,
-    primaryHashes: List<String>,
-    servers: List<String>,
-    dTag: String?,
-    label: String,
-): TagArray {
-    require(isSha256Hex(manifestSha256)) { "Bad manifest hash" }
-    val tags = mutableListOf<Array<String>>()
-    dTag?.let { tags += arrayOf(MagpieSpec.TAG_D, it) }
-    manifest.modules().forEach { tags += arrayOf(MagpieSpec.TAG_MODULE, it.key) }
-    tags += arrayOf(MagpieSpec.TAG_VERSION, manifest.coordinate.version)
-    tags += arrayOf(MagpieSpec.TAG_MANIFEST, manifestSha256, manifestSize.toString())
-    tags += arrayOf(MagpieSpec.TAG_HASH, manifestSha256)
-    servers.distinct().forEach { tags += arrayOf(MagpieSpec.TAG_SERVER, it) }
-    tags += arrayOf(MagpieSpec.TAG_ALT, "$label of ${manifest.coordinate} (Maven artifacts on Nostr)")
-
-    // Envelope: id, pubkey, sig, created_at, kind and punctuation, about 250 bytes.
-    var size = 250 + tags.sumOf { tagJsonSize(it) }
-    require(
-        size <= MagpieSpec.MAX_EVENT_BYTES,
-    ) { "Release event would exceed ${MagpieSpec.MAX_EVENT_BYTES} bytes before any artifact hash" }
-    for (hash in primaryHashes) {
-        if (hash == manifestSha256) continue
-        val tag = arrayOf(MagpieSpec.TAG_HASH, hash)
-        val extra = tagJsonSize(tag)
-        if (size + extra > MagpieSpec.MAX_EVENT_BYTES) break
-        tags += tag
-        size += extra
-    }
-    return tags.toTypedArray()
-}
-
 private fun tagJsonSize(tag: Array<String>): Int = 3 + tag.sumOf { it.encodeToByteArray().size + 3 }
-
-internal fun TagArray.values(name: String): List<String> = filter { it.size >= 2 && it[0] == name }.map { it[1] }
-
-internal fun TagArray.firstValue(name: String): String? = firstOrNull { it.size >= 2 && it[0] == name }?.get(1)
-
-/** Wraps a generic event from a relay in its Magpie class, or null for other kinds. */
-public object MagpieEvents {
-    public fun wrap(event: Event): Event? =
-        when (event.kind) {
-            MagpieSpec.KIND_RELEASE ->
-                event as? MagpieReleaseEvent
-                    ?: MagpieReleaseEvent(event.id, event.pubKey, event.createdAt, event.tags, event.content, event.sig)
-            MagpieSpec.KIND_SNAPSHOT ->
-                event as? MagpieSnapshotEvent
-                    ?: MagpieSnapshotEvent(event.id, event.pubKey, event.createdAt, event.tags, event.content, event.sig)
-            else -> null
-        }
-}

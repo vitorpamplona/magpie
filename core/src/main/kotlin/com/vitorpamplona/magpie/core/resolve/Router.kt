@@ -25,10 +25,13 @@ import com.vitorpamplona.magpie.core.util.ExpiringCache
 import com.vitorpamplona.magpie.core.util.Files2
 import com.vitorpamplona.magpie.core.util.MagpieLog
 import com.vitorpamplona.magpie.spec.ChecksumAlgorithm
+import com.vitorpamplona.magpie.spec.Coordinate
 import com.vitorpamplona.magpie.spec.Manifest
 import com.vitorpamplona.magpie.spec.MavenPath
 import com.vitorpamplona.magpie.spec.toPath
+import com.vitorpamplona.quartz.nip01Core.core.Event
 import com.vitorpamplona.quartz.nip01Core.core.HexKey
+import com.vitorpamplona.quartz.nipFCMavenRepositories.MavenPublication
 import java.io.File
 import java.net.URI
 import java.nio.file.Files
@@ -213,13 +216,13 @@ public class Router(
      * An offline build reads the mirror through whichever metadata Gradle asks for, so whenever a
      * file of a module is served, its `.module` and `.pom` go to the mirror too.
      */
-    private suspend fun mirrorModuleMetadata(
+    private suspend fun <P> mirrorModuleMetadata(
         mirror: RepositoryMirror,
         publisher: HexKey,
         manifest: Manifest,
-        publication: com.vitorpamplona.magpie.spec.MagpiePublicationEvent,
-        coordinate: com.vitorpamplona.magpie.spec.Coordinate,
-    ) {
+        publication: P,
+        coordinate: Coordinate,
+    ) where P : Event, P : MavenPublication {
         manifest.filesOf(coordinate.artifact).forEach { (fileName, entry) ->
             if (!(fileName.endsWith(".pom") || fileName.endsWith(".module"))) return@forEach
             val path = MavenPath.parseFile(coordinate, fileName) ?: return@forEach

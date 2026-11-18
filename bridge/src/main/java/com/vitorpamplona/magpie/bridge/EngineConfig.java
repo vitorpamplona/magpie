@@ -68,8 +68,6 @@ public final class EngineConfig {
     /** The root artifactId (the KMP root module, or the single publication). */
     public static final String ARTIFACT = "artifact";
     public static final String VERSION = "version";
-    /** Relays to publish to besides the publisher's NIP-65 write relays (archival relays). */
-    public static final String PUBLISH_RELAYS = "publishRelays";
     /** NIP-46 bunker URI. Takes precedence over the nsec. */
     public static final String BUNKER_URI = "bunkerUri";
     /** nsec (or hex) secret key, from an environment variable. */

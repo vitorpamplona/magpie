@@ -1,9 +1,8 @@
 [versions]
 kotlin = "2.4.21"
-# Quartz from Maven Central. 2.15.1 is the newest release Central serves (2.16/2.17 are tagged but
-# blocked by Central's upload limit until 2026-12-01). It already carries the pure-Kotlin
-# secp256k1 (Secp256k1InstanceKotlin) the resolver verifies with.
-quartz = "2.15.1"
+# Quartz, released on Nostr + Blossom (settings.gradle.kts). 2.19.0 has the NIP-FC event classes
+# (nipFCMavenRepositories: MavenReleaseEvent, MavenSnapshotEvent) Magpie publishes and resolves.
+quartz = "2.19.0"
 kotlinxCoroutines = "1.11.0"
 kotlinxSerialization = "1.12.0"
 okhttp = "5.5.1"

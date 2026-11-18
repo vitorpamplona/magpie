@@ -23,6 +23,11 @@ package com.vitorpamplona.magpie.spec
 import com.vitorpamplona.quartz.nip01Core.core.Event
 import com.vitorpamplona.quartz.nip01Core.core.HexKey
 import com.vitorpamplona.quartz.nip01Core.crypto.EventHasher
+import com.vitorpamplona.quartz.nipFCMavenRepositories.MavenModule
+import com.vitorpamplona.quartz.nipFCMavenRepositories.hasMavenModule
+import com.vitorpamplona.quartz.nipFCMavenRepositories.mavenVersion
+import com.vitorpamplona.quartz.nipFCMavenRepositories.release.MavenReleaseEvent
+import com.vitorpamplona.quartz.nipFCMavenRepositories.snapshot.MavenSnapshotEvent
 import com.vitorpamplona.quartz.utils.Hex
 import com.vitorpamplona.quartz.utils.Secp256k1InstanceKotlin
 
@@ -52,9 +57,9 @@ private fun isLowerHex(
 /** The outcome of picking the canonical release of one version. */
 public sealed interface ReleaseSelection {
     public data class Found(
-        val release: MagpieReleaseEvent,
+        val release: MavenReleaseEvent,
         /** Other releases for the same version that lost (later, or a lock pinned another manifest). */
-        val shadowed: List<MagpieReleaseEvent>,
+        val shadowed: List<MavenReleaseEvent>,
     ) : ReleaseSelection
 
     public data object NotFound : ReleaseSelection
@@ -62,7 +67,7 @@ public sealed interface ReleaseSelection {
     /** The lock file pins [lockedManifest] but no release of it (by the trusted publisher) was found. */
     public data class LockedReleaseMissing(
         val lockedManifest: String,
-        val available: List<MagpieReleaseEvent>,
+        val available: List<MavenReleaseEvent>,
     ) : ReleaseSelection
 }
 
@@ -85,14 +90,17 @@ public object WinnerSelection {
         module: ModuleId,
         version: String,
         publisher: HexKey,
-    ): List<MagpieReleaseEvent> =
-        events
+    ): List<MavenReleaseEvent> {
+        val maven = module.toMavenModule()
+        return events
             .asSequence()
-            .mapNotNull { MagpieEvents.wrap(it) as? MagpieReleaseEvent }
-            .filter { it.pubKey == publisher && it.isWellFormed() && it.covers(module, version) }
+            .filter { it.pubKey == publisher }
+            .mapNotNull { MagpieEvents.wrap(it) as? MavenReleaseEvent }
+            .filter { it.isFor(maven, version) && it.isUsable() }
             .distinctBy { it.id }
             .sortedWith(RELEASE_ORDER)
             .toList()
+    }
 
     /**
      * The canonical release. With [lockedManifest] (from the lock file) only releases of that
@@ -121,13 +129,16 @@ public object WinnerSelection {
         module: ModuleId,
         version: String,
         publisher: HexKey,
-    ): MagpieSnapshotEvent? =
-        events
+    ): MavenSnapshotEvent? {
+        val maven = module.toMavenModule()
+        return events
             .asSequence()
-            .mapNotNull { MagpieEvents.wrap(it) as? MagpieSnapshotEvent }
-            .filter { it.pubKey == publisher && it.isWellFormed() && it.covers(module, version) }
+            .filter { it.pubKey == publisher }
+            .mapNotNull { MagpieEvents.wrap(it) as? MavenSnapshotEvent }
+            .filter { it.isFor(maven, version) && it.isUsable() }
             .sortedWith(SNAPSHOT_ORDER)
             .firstOrNull()
+    }
 
     /**
      * The winning release of every version of [module], ordered by the winner's `created_at`
@@ -137,15 +148,18 @@ public object WinnerSelection {
         events: Collection<Event>,
         module: ModuleId,
         publisher: HexKey,
-    ): List<MagpieReleaseEvent> =
-        events
+    ): List<MavenReleaseEvent> {
+        val maven = module.toMavenModule()
+        return events
             .asSequence()
-            .mapNotNull { MagpieEvents.wrap(it) as? MagpieReleaseEvent }
-            .filter { it.pubKey == publisher && it.isWellFormed() && module.key in it.moduleKeys() }
+            .filter { it.pubKey == publisher }
+            .mapNotNull { MagpieEvents.wrap(it) as? MavenReleaseEvent }
+            .filter { it.tags.hasMavenModule(maven) && it.isUsable() }
             .distinctBy { it.id }
             .sortedWith(RELEASE_ORDER)
             .distinctBy { it.version() }
             .toList()
+    }
 
     /**
      * Every release of [module] by [publisher], grouped by version in one pass, each group
@@ -155,27 +169,42 @@ public object WinnerSelection {
         events: Collection<Event>,
         module: ModuleId,
         publisher: HexKey,
-    ): Map<String, List<MagpieReleaseEvent>> =
-        events
+    ): Map<String, List<MavenReleaseEvent>> {
+        val maven = module.toMavenModule()
+        return events
             .asSequence()
-            .mapNotNull { MagpieEvents.wrap(it) as? MagpieReleaseEvent }
-            .filter { it.pubKey == publisher && module.key in it.moduleKeys() && it.isWellFormed() }
+            .filter { it.pubKey == publisher }
+            .mapNotNull { MagpieEvents.wrap(it) as? MavenReleaseEvent }
+            .filter { it.tags.hasMavenModule(maven) && it.isUsable() }
             .distinctBy { it.id }
             .sortedWith(RELEASE_ORDER)
             .groupBy { it.version()!! }
+    }
 
     /** Every snapshot version of [module] the publisher has, newest build of each. */
     public fun snapshotsByVersion(
         events: Collection<Event>,
         module: ModuleId,
         publisher: HexKey,
-    ): List<MagpieSnapshotEvent> =
-        events
+    ): List<MavenSnapshotEvent> {
+        val maven = module.toMavenModule()
+        return events
             .asSequence()
-            .mapNotNull { MagpieEvents.wrap(it) as? MagpieSnapshotEvent }
-            .filter { it.pubKey == publisher && it.isWellFormed() && module.key in it.moduleKeys() }
+            .filter { it.pubKey == publisher }
+            .mapNotNull { MagpieEvents.wrap(it) as? MavenSnapshotEvent }
+            .filter { it.tags.hasMavenModule(maven) && it.isUsable() }
             .sortedWith(SNAPSHOT_ORDER)
             .distinctBy { it.version() }
             .sortedWith(RELEASE_ORDER)
             .toList()
+    }
+
+    /**
+     * The first `v` is [version] and a `j` names [module], read from the raw tags without
+     * allocating: the cheap test, run on every event before [isUsable].
+     */
+    private fun Event.isFor(
+        module: MavenModule,
+        version: String,
+    ): Boolean = tags.mavenVersion() == version && tags.hasMavenModule(module)
 }

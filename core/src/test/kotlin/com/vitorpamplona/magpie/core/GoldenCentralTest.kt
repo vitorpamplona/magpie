@@ -25,7 +25,7 @@ import com.vitorpamplona.magpie.core.resolve.MetadataGenerator
 import com.vitorpamplona.magpie.core.resolve.VersionEntry
 import com.vitorpamplona.magpie.core.util.Hashing
 import com.vitorpamplona.magpie.spec.ChecksumAlgorithm
-import com.vitorpamplona.magpie.spec.MagpieReleaseEvent
+import com.vitorpamplona.magpie.spec.MagpieEvents
 import com.vitorpamplona.magpie.spec.ModuleId
 import com.vitorpamplona.magpie.testkit.TestIdentity
 import java.io.File
@@ -75,7 +75,7 @@ class GoldenCentralTest {
         val scanned = RepoScanner.scan(golden, "com.vitorpamplona.quartz", "2.15.1", "quartz")
         scanned.files.values.forEach { world.blossom.put(it.readBytes()) }
         world.blossom.put(scanned.manifest.toBytes())
-        world.relay.add(alice.sign(MagpieReleaseEvent.build(scanned.manifest, servers = listOf(world.blossom.url), createdAt = 1_700_000_000)))
+        world.relay.add(alice.sign(MagpieEvents.release(scanned.manifest, servers = listOf(world.blossom.url), createdAt = 1_700_000_000)))
 
         val stack =
             com.vitorpamplona.magpie.core.engine.ResolverStack.create(

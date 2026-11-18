@@ -21,8 +21,7 @@
 package com.vitorpamplona.magpie.testkit
 
 import com.vitorpamplona.magpie.spec.Coordinate
-import com.vitorpamplona.magpie.spec.MagpieReleaseEvent
-import com.vitorpamplona.magpie.spec.MagpieSnapshotEvent
+import com.vitorpamplona.magpie.spec.MagpieEvents
 import com.vitorpamplona.magpie.spec.MagpieSpec
 import com.vitorpamplona.magpie.spec.Manifest
 import com.vitorpamplona.magpie.spec.ManifestFile
@@ -51,11 +50,11 @@ class TestkitTest {
                     mapOf("lib-jvm/1.0/lib-jvm-1.0.jar" to ManifestFile("a".repeat(64), 1)),
                 )
             val m2 = Manifest(Coordinate("com.example", "lib", "2.0"), emptyMap())
-            relay.add(alice.sign(MagpieReleaseEvent.build(m1, createdAt = 100)), alice.sign(MagpieReleaseEvent.build(m2, createdAt = 200)))
+            relay.add(alice.sign(MagpieEvents.release(m1, createdAt = 100)), alice.sign(MagpieEvents.release(m2, createdAt = 200)))
             val snap = Manifest(Coordinate("com.example", "lib", "3.0-SNAPSHOT"), emptyMap())
             relay.add(
-                alice.sign(MagpieSnapshotEvent.build(snap, createdAt = 100)),
-                alice.sign(MagpieSnapshotEvent.build(snap, createdAt = 300)),
+                alice.sign(MagpieEvents.snapshot(snap, createdAt = 100)),
+                alice.sign(MagpieEvents.snapshot(snap, createdAt = 300)),
             )
 
             val client = NostrClient(BasicOkHttpWebSocket.Builder { OkHttpClient() })

@@ -124,7 +124,6 @@ public class MagpieEngineImpl : MagpieEngine {
                                     version = config.getValue(EngineConfig.VERSION),
                                     rootArtifact = config[EngineConfig.ARTIFACT]?.takeIf { it.isNotBlank() },
                                     indexRelays = config.list(EngineConfig.INDEX_RELAYS),
-                                    publishRelays = config.list(EngineConfig.PUBLISH_RELAYS),
                                     partial = config.flag(EngineConfig.PARTIAL),
                                     partialDir = config[EngineConfig.PARTIAL_DIR]?.takeIf { it.isNotBlank() }?.let(::File),
                                     partialName = config[EngineConfig.PARTIAL_NAME]?.takeIf { it.isNotBlank() } ?: "partial",
@@ -169,7 +168,6 @@ public class MagpieEngineImpl : MagpieEngine {
         ListSettings(
             group = config[EngineConfig.GROUP]?.takeIf { it.isNotBlank() },
             indexRelays = config.list(EngineConfig.INDEX_RELAYS),
-            publishRelays = config.list(EngineConfig.PUBLISH_RELAYS),
         )
 
     private fun signerFor(
@@ -180,7 +178,10 @@ public class MagpieEngineImpl : MagpieEngine {
         val bunker = config[EngineConfig.BUNKER_URI]?.takeIf { it.isNotBlank() }
         val nsec = config[EngineConfig.NSEC]?.takeIf { it.isNotBlank() }
         return when {
-            bunker != null -> BunkerSigner(bunker, nostr, log)
+            bunker != null -> {
+                val cacheDir = config[EngineConfig.CACHE_DIR]?.takeIf { it.isNotBlank() }?.let(::File)
+                BunkerSigner(bunker, nostr, log, clientKeyFile = cacheDir?.let { BunkerSigner.clientKeyFile(it, bunker) })
+            }
             nsec != null -> SecretKeySigner(nsec)
             else -> throw IllegalStateException(
                 "No signer configured. Set a NIP-46 bunker URI (magpie.signer.bunker, default env MAGPIE_BUNKER) " +

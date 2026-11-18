@@ -24,6 +24,8 @@ import com.vitorpamplona.quartz.nip01Core.core.Event
 import com.vitorpamplona.quartz.nip01Core.crypto.KeyPair
 import com.vitorpamplona.quartz.nip01Core.signers.EventTemplate
 import com.vitorpamplona.quartz.nip01Core.signers.NostrSignerSync
+import com.vitorpamplona.quartz.nipFCMavenRepositories.release.MavenReleaseEvent
+import com.vitorpamplona.quartz.nipFCMavenRepositories.snapshot.MavenSnapshotEvent
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -52,7 +54,7 @@ class WinnerSelectionTest {
         version: String,
         createdAt: Long,
         seed: Char = 'a',
-    ) = signer.signed(MagpieReleaseEvent.build(manifest(version, seed), createdAt = createdAt)) as MagpieReleaseEvent
+    ) = signer.signed(MagpieEvents.release(manifest(version, seed), createdAt = createdAt)) as MavenReleaseEvent
 
     @Test
     fun earliestReleaseWins() {
@@ -126,20 +128,20 @@ class WinnerSelectionTest {
     @Test
     fun newestSnapshotWins() {
         val m = Manifest(Coordinate("com.example", "lib", "1.0-SNAPSHOT"), emptyMap())
-        val old = alice.signed(MagpieSnapshotEvent.build(m, createdAt = 100)) as MagpieSnapshotEvent
-        val new = alice.signed(MagpieSnapshotEvent.build(m, createdAt = 200)) as MagpieSnapshotEvent
+        val old = alice.signed(MagpieEvents.snapshot(m, createdAt = 100)) as MavenSnapshotEvent
+        val new = alice.signed(MagpieEvents.snapshot(m, createdAt = 200)) as MavenSnapshotEvent
         assertEquals(new.id, WinnerSelection.snapshot(listOf(old, new), module, "1.0-SNAPSHOT", alice.pubKey)?.id)
         assertEquals("com.example:lib:1.0-SNAPSHOT", new.dTag())
-        assertTrue(new.isWellFormed())
+        assertTrue(new.isUsable())
     }
 
     @Test
     fun signaturesVerifyWithThePureKotlinSecp256k1() {
         val release = release(alice, "1.0", 100)
         assertTrue(EventVerification.isValid(release))
-        val tampered = MagpieReleaseEvent(release.id, release.pubKey, release.createdAt + 1, release.tags, release.content, release.sig)
+        val tampered = MavenReleaseEvent(release.id, release.pubKey, release.createdAt + 1, release.tags, release.content, release.sig)
         assertFalse(EventVerification.isValid(tampered))
-        val wrongSig = MagpieReleaseEvent(release.id, mallory.pubKey, release.createdAt, release.tags, release.content, release.sig)
+        val wrongSig = MavenReleaseEvent(release.id, mallory.pubKey, release.createdAt, release.tags, release.content, release.sig)
         assertFalse(EventVerification.isValid(wrongSig))
     }
 
@@ -156,23 +158,23 @@ class WinnerSelectionTest {
             )
         val event =
             alice.signed(
-                MagpieReleaseEvent.build(m, servers = listOf("https://blossom.example"), createdAt = 1),
-            ) as MagpieReleaseEvent
+                MagpieEvents.release(m, servers = listOf("https://blossom.example"), createdAt = 1),
+            ) as MavenReleaseEvent
         assertEquals(listOf("com.example:lib", "com.example:lib-jvm"), event.moduleKeys())
         assertEquals("1.0", event.version())
         assertEquals(m.sha256Hex(), event.manifest()?.sha256)
         assertEquals(setOf(m.sha256Hex(), "1".repeat(64), "2".repeat(64)), event.hashes().toSet())
         assertEquals(listOf("https://blossom.example"), event.servers())
-        assertEquals(Coordinate("com.example", "lib", "1.0"), event.coordinate())
+        assertEquals(Coordinate("com.example", "lib", "1.0"), event.rootCoordinate())
     }
 
     @Test
     fun releaseStaysUnderTheSizeBudget() {
         val files = (0 until 400).associate { i -> "lib/1.0/lib-1.0-c$i.jar" to ManifestFile(i.toString(16).padStart(64, '0'), 1) }
         val m = Manifest(Coordinate("com.example", "lib", "1.0"), files)
-        val event = alice.signed(MagpieReleaseEvent.build(m, createdAt = 1))
+        val event = alice.signed(MagpieEvents.release(m, createdAt = 1))
         assertTrue(event.toJson().length <= MagpieSpec.MAX_EVENT_BYTES, "size ${event.toJson().length}")
-        assertTrue(m.sha256Hex() in (event as MagpieReleaseEvent).hashes())
+        assertTrue(m.sha256Hex() in (event as MavenReleaseEvent).hashes())
     }
 
     @Test
@@ -200,8 +202,8 @@ class WinnerSelectionTest {
         val r = release(alice, "1.0", 100)
         // A hex pair rewritten as non-hex must fail, whatever a lenient decoder makes of it.
         val forged = "zz" + r.sig.substring(2)
-        assertFalse(EventVerification.isValid(MagpieReleaseEvent(r.id, r.pubKey, r.createdAt, r.tags, r.content, forged)))
-        assertFalse(EventVerification.isValid(MagpieReleaseEvent(r.id, r.pubKey, r.createdAt, r.tags, r.content, r.sig.uppercase())))
+        assertFalse(EventVerification.isValid(MavenReleaseEvent(r.id, r.pubKey, r.createdAt, r.tags, r.content, forged)))
+        assertFalse(EventVerification.isValid(MavenReleaseEvent(r.id, r.pubKey, r.createdAt, r.tags, r.content, r.sig.uppercase())))
     }
 
     @Test
@@ -209,8 +211,8 @@ class WinnerSelectionTest {
         val m = manifest("1.0", 'a')
         val event = release(alice, "1.0", 100)
         val tags = event.tags.map { if (it[0] == MagpieSpec.TAG_MANIFEST) arrayOf(it[0], it[1]) else it }.toTypedArray()
-        val unsized = alice.signed(EventTemplate<MagpieReleaseEvent>(100, MagpieSpec.KIND_RELEASE, tags, "")) as MagpieReleaseEvent
-        assertFalse(unsized.isWellFormed())
+        val unsized = alice.signed(EventTemplate<MavenReleaseEvent>(100, MagpieSpec.KIND_RELEASE, tags, "")) as MavenReleaseEvent
+        assertFalse(unsized.isUsable())
         assertEquals(m.sha256Hex(), unsized.manifest()?.sha256)
     }
 
@@ -236,5 +238,19 @@ class WinnerSelectionTest {
     fun numericGroupsAreNotHosts() {
         assertNull(ReleaseIdentity.hostOf("1.0.0.127"))
         assertEquals("example.com", ReleaseIdentity.hostOf("com.example"))
+    }
+
+    @Test
+    fun aSecondVersionTagDoesNotClaimThatVersion() {
+        // version() reads the first `v`; covers() must agree, or this 1.0 release (by the trusted
+        // key, earliest) would be picked for 2.0 and win that version's selection.
+        val one = release(alice, "1.0", 100)
+        val tags = one.tags.flatMap { if (it[0] == MagpieSpec.TAG_VERSION) listOf(it, arrayOf(MagpieSpec.TAG_VERSION, "2.0")) else listOf(it) }.toTypedArray()
+        val both = alice.signed(EventTemplate<MavenReleaseEvent>(100, MagpieSpec.KIND_RELEASE, tags, "")) as MavenReleaseEvent
+        val two = release(alice, "2.0", 200, seed = 'b')
+        assertEquals("1.0", both.version())
+        assertFalse(both.covers(module, "2.0"))
+        val selected = WinnerSelection.release(listOf(both, two), module, "2.0", alice.pubKey)
+        assertEquals(two.id, (selected as ReleaseSelection.Found).release.id)
     }
 }

@@ -11,7 +11,7 @@ In `settings.gradle.kts`:
 
 ```kotlin
 plugins {
-    id("com.vitorpamplona.magpie") version "0.1.1"
+    id("com.vitorpamplona.magpie") version "0.2.0"
 }
 
 magpie {
@@ -69,7 +69,8 @@ of reaching it. If it ever fails, check with the publisher before editing it. In
    ```
 
 3. **Give CI a signer.** Set `MAGPIE_BUNKER` to the key's NIP-46 `bunker://…` address or 
-   `MAGPIE_NSEC` (an `nsec1…`) also works, but it puts the key itself in CI.
+   `MAGPIE_NSEC` (an `nsec1…`) also works, but it puts the key itself in CI. With a bunker, you
+   approve Magpie's connection once per machine, then each release's signature.
 
 ### Each release
 
@@ -77,7 +78,7 @@ In the library's `build.gradle.kts`:
 
 ```kotlin
 plugins {
-    id("com.vitorpamplona.magpie.publish") version "0.1.1"
+    id("com.vitorpamplona.magpie.publish") version "0.2.0"
 }
 
 group = "com.yourdomain"
