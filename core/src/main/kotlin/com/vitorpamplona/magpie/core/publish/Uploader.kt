@@ -59,7 +59,7 @@ public class BlobSource(
 public sealed interface Preflight {
     public data object Accepted : Preflight
 
-    /** The server doesn't implement BUD-06; only the upload will tell. */
+    /** The server doesn't implement BUD-06, or wants an authorization to answer: only the upload will tell. */
     public data object Unknown : Preflight
 
     public data class Refused(
@@ -136,7 +136,9 @@ public class BlossomClient(
                 http.newCall(request).execute().use { response ->
                     when {
                         response.isSuccessful -> Preflight.Accepted
-                        response.code == 404 || response.code == 405 || response.code == 501 -> Preflight.Unknown
+                        // 401: the server wants an authorization even to answer, and nothing is
+                        // signed until every check passes, so only the signed upload can tell.
+                        response.code == 401 || response.code == 404 || response.code == 405 || response.code == 501 -> Preflight.Unknown
                         else -> Preflight.Refused(response.code, response.header("X-Reason") ?: response.message)
                     }
                 }

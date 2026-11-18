@@ -62,6 +62,8 @@ class InMemoryBlossom(
     @Volatile var rejectMultiHashAuth: Boolean = false,
     /** Require a valid auth event on uploads. */
     @Volatile var requireAuth: Boolean = true,
+    /** Answer an unauthorized BUD-06 preflight with 401, as blossom.band does. */
+    @Volatile var preflightNeedsAuth: Boolean = false,
 ) : AutoCloseable {
     val blobs = ConcurrentHashMap<String, ByteArray>()
     val uploads = AtomicInteger()
@@ -160,6 +162,11 @@ class InMemoryBlossom(
         if (size > maxUploadSize) {
             call.response.header("X-Reason", "File too large. Max allowed size is $maxUploadSize bytes.")
             call.respond(HttpStatusCode.PayloadTooLarge)
+            return
+        }
+        if (preflightNeedsAuth && call.request.header("Authorization") == null) {
+            call.response.header("X-Reason", "Missing Blossom Authorization header, authorization required")
+            call.respond(HttpStatusCode.Unauthorized)
             return
         }
         call.respond(HttpStatusCode.OK)
