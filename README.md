@@ -20,7 +20,7 @@ plugins {
 }
 
 magpie {
-    group("com.example")
+    group("com.yourdomain")
 }
 ```
 
@@ -28,11 +28,11 @@ Then depend on it as usual:
 
 ```kotlin
 dependencies {
-    implementation("com.example:lib:1.0.0")
+    implementation("com.yourdomain:yourlibrary:1.0.0")
 }
 ```
 
-`group("com.example")` trusts the release key that `example.com` names as `releases` in its
+`group("com.yourdomain")` trusts the release key that `yourdomain.com` names as `releases` in its
 `/.well-known/nostr.json`, for that group and its subgroups. For a library whose group isn't a
 domain, pin the publisher's key instead and say where to find its relays:
 
@@ -56,7 +56,7 @@ resolved, and fails the build if either changes later.
    ```json
    {
      "names": { "releases": "<hex pubkey>" },
-     "relays": { "<hex pubkey>": ["wss://relay.example.com"] }
+     "relays": { "<hex pubkey>": ["wss://your.relay.com"] }
    }
    ```
 
@@ -64,7 +64,7 @@ resolved, and fails the build if either changes later.
    servers, or with:
 
    ```bash
-   ./gradlew createNostrServerList --server=https://blossom.example.com
+   ./gradlew createNostrServerList --server=https://your.blossom.server
    ```
 
 3. **Give CI a signer.** Set `MAGPIE_BUNKER` to the key's NIP-46 `bunker://…` address. With
@@ -80,7 +80,7 @@ plugins {
     id("com.vitorpamplona.magpie.publish") version "0.1.1"
 }
 
-group = "com.example"
+group = "com.yourdomain"
 version = "1.0.0"
 ```
 
