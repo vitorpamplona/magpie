@@ -26,17 +26,18 @@ import com.vitorpamplona.magpie.core.util.ExpiringCache
 import com.vitorpamplona.magpie.core.util.MagpieLog
 import com.vitorpamplona.magpie.core.util.StripedMutex
 import com.vitorpamplona.magpie.spec.Coordinate
-import com.vitorpamplona.magpie.spec.MagpiePublicationEvent
-import com.vitorpamplona.magpie.spec.MagpieReleaseEvent
-import com.vitorpamplona.magpie.spec.MagpieSnapshotEvent
 import com.vitorpamplona.magpie.spec.MagpieSpec
 import com.vitorpamplona.magpie.spec.Manifest
 import com.vitorpamplona.magpie.spec.ModuleId
 import com.vitorpamplona.magpie.spec.PublicKeys
 import com.vitorpamplona.magpie.spec.ReleaseSelection
 import com.vitorpamplona.magpie.spec.WinnerSelection
+import com.vitorpamplona.magpie.spec.moduleIds
 import com.vitorpamplona.quartz.nip01Core.core.Event
 import com.vitorpamplona.quartz.nip01Core.core.HexKey
+import com.vitorpamplona.quartz.nipFCMavenRepositories.MavenPublication
+import com.vitorpamplona.quartz.nipFCMavenRepositories.release.MavenReleaseEvent
+import com.vitorpamplona.quartz.nipFCMavenRepositories.snapshot.MavenSnapshotEvent
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.sync.withLock
 import java.io.File
@@ -71,8 +72,8 @@ public class Resolver(
     private val log: MagpieLog,
     private val clock: Clock = Clock.SYSTEM,
 ) {
-    private val releases = ExpiringCache<String, MagpieReleaseEvent>(MAX_ENTRIES, clock)
-    private val snapshots = ExpiringCache<String, MagpieSnapshotEvent?>(MAX_ENTRIES, clock)
+    private val releases = ExpiringCache<String, MavenReleaseEvent>(MAX_ENTRIES, clock)
+    private val snapshots = ExpiringCache<String, MavenSnapshotEvent?>(MAX_ENTRIES, clock)
     private val listings = ExpiringCache<String, List<Event>>(MAX_ENTRIES, clock)
     private val serverLists = ExpiringCache<String, List<String>>(MAX_ENTRIES, clock)
     private val misses = ExpiringCache<String, Unit>(MAX_ENTRIES, clock)
@@ -109,8 +110,8 @@ public class Resolver(
     private suspend fun accept(
         key: String,
         coordinate: Coordinate,
-        release: MagpieReleaseEvent,
-    ): MagpieReleaseEvent {
+        release: MavenReleaseEvent,
+    ): MavenReleaseEvent {
         trust.recordRelease(coordinate, release)
         releases.put(key, release, FOREVER)
         return release
@@ -125,7 +126,7 @@ public class Resolver(
     public suspend fun release(
         coordinate: Coordinate,
         publisher: HexKey,
-    ): MagpieReleaseEvent? {
+    ): MavenReleaseEvent? {
         val key = releaseKey(publisher, coordinate)
         releases.get(key)?.let { return accept(key, coordinate, it) }
         return single(key) {
@@ -190,12 +191,12 @@ public class Resolver(
      * a module when it is actually resolved.
      */
     private fun shareWithSiblings(
-        release: MagpieReleaseEvent,
+        release: MavenReleaseEvent,
         coordinate: Coordinate,
         publisher: HexKey,
     ) {
         val manifest = release.manifest()?.sha256 ?: return
-        release.modules().filter { it != coordinate.module }.forEach { module ->
+        release.moduleIds().filter { it != coordinate.module }.forEach { module ->
             val sibling = runCatching { module.withVersion(coordinate.version) }.getOrNull() ?: return@forEach
             val locked = trust.lockedManifest(sibling)
             if (locked == null || locked == manifest) releases.put(releaseKey(publisher, sibling), release, settings.listingTtlMs)
@@ -226,7 +227,7 @@ public class Resolver(
     public suspend fun snapshot(
         coordinate: Coordinate,
         publisher: HexKey,
-    ): MagpieSnapshotEvent? {
+    ): MavenSnapshotEvent? {
         val key = "s:$publisher:$coordinate"
         if (snapshots.contains(key)) return snapshots.get(key)
         return single(key) {
@@ -277,7 +278,7 @@ public class Resolver(
     }
 
     /** The manifest a publication pins, fetched and hash-checked once, then cached forever. */
-    public suspend fun manifest(publication: MagpiePublicationEvent): Manifest {
+    public suspend fun <P> manifest(publication: P): Manifest where P : Event, P : MavenPublication {
         val pointer = publication.manifest() ?: throw IllegalStateException("Event ${publication.id} has no manifest")
         manifests.get(pointer.sha256)?.let { return it }
         // A missing or absurd size must not mean "no limit": cap what a server can stream at us.
@@ -296,11 +297,11 @@ public class Resolver(
      * A blob: from the disk cache, else from the publication's server hints, then the publisher's
      * current kind 10063 list, then the configured fallbacks.
      */
-    public suspend fun blob(
+    public suspend fun <P> blob(
         sha256: String,
         size: Long,
-        publication: MagpiePublicationEvent,
-    ): File {
+        publication: P,
+    ): File where P : Event, P : MavenPublication {
         fetcher.store.get(sha256)?.let { return it }
         // One download per blob, however many requests (and mirror writes) want it at once.
         val mine = CompletableDeferred<File>()
@@ -316,11 +317,11 @@ public class Resolver(
         }
     }
 
-    private suspend fun fetchBlob(
+    private suspend fun <P> fetchBlob(
         sha256: String,
         size: Long,
-        publication: MagpiePublicationEvent,
-    ): File {
+        publication: P,
+    ): File where P : Event, P : MavenPublication {
         if (!query.online && settings.offline) throw BlobNotFoundException(sha256, emptyList(), listOf("offline, and not in the cache"))
         val tried = mutableSetOf<String>()
         val hints = publication.servers().map { it.trimEnd('/') }

@@ -23,6 +23,8 @@ package com.vitorpamplona.magpie.spec
 import com.vitorpamplona.quartz.nip01Core.core.Event
 import com.vitorpamplona.quartz.nip01Core.core.HexKey
 import com.vitorpamplona.quartz.nip01Core.crypto.EventHasher
+import com.vitorpamplona.quartz.nipFCMavenRepositories.release.MavenReleaseEvent
+import com.vitorpamplona.quartz.nipFCMavenRepositories.snapshot.MavenSnapshotEvent
 import com.vitorpamplona.quartz.utils.Hex
 import com.vitorpamplona.quartz.utils.Secp256k1InstanceKotlin
 
@@ -52,9 +54,9 @@ private fun isLowerHex(
 /** The outcome of picking the canonical release of one version. */
 public sealed interface ReleaseSelection {
     public data class Found(
-        val release: MagpieReleaseEvent,
+        val release: MavenReleaseEvent,
         /** Other releases for the same version that lost (later, or a lock pinned another manifest). */
-        val shadowed: List<MagpieReleaseEvent>,
+        val shadowed: List<MavenReleaseEvent>,
     ) : ReleaseSelection
 
     public data object NotFound : ReleaseSelection
@@ -62,7 +64,7 @@ public sealed interface ReleaseSelection {
     /** The lock file pins [lockedManifest] but no release of it (by the trusted publisher) was found. */
     public data class LockedReleaseMissing(
         val lockedManifest: String,
-        val available: List<MagpieReleaseEvent>,
+        val available: List<MavenReleaseEvent>,
     ) : ReleaseSelection
 }
 
@@ -85,11 +87,11 @@ public object WinnerSelection {
         module: ModuleId,
         version: String,
         publisher: HexKey,
-    ): List<MagpieReleaseEvent> =
+    ): List<MavenReleaseEvent> =
         events
             .asSequence()
-            .mapNotNull { MagpieEvents.wrap(it) as? MagpieReleaseEvent }
-            .filter { it.pubKey == publisher && it.isWellFormed() && it.covers(module, version) }
+            .mapNotNull { MagpieEvents.wrap(it) as? MavenReleaseEvent }
+            .filter { it.pubKey == publisher && it.isUsable() && it.covers(module, version) }
             .distinctBy { it.id }
             .sortedWith(RELEASE_ORDER)
             .toList()
@@ -121,11 +123,11 @@ public object WinnerSelection {
         module: ModuleId,
         version: String,
         publisher: HexKey,
-    ): MagpieSnapshotEvent? =
+    ): MavenSnapshotEvent? =
         events
             .asSequence()
-            .mapNotNull { MagpieEvents.wrap(it) as? MagpieSnapshotEvent }
-            .filter { it.pubKey == publisher && it.isWellFormed() && it.covers(module, version) }
+            .mapNotNull { MagpieEvents.wrap(it) as? MavenSnapshotEvent }
+            .filter { it.pubKey == publisher && it.isUsable() && it.covers(module, version) }
             .sortedWith(SNAPSHOT_ORDER)
             .firstOrNull()
 
@@ -137,11 +139,11 @@ public object WinnerSelection {
         events: Collection<Event>,
         module: ModuleId,
         publisher: HexKey,
-    ): List<MagpieReleaseEvent> =
+    ): List<MavenReleaseEvent> =
         events
             .asSequence()
-            .mapNotNull { MagpieEvents.wrap(it) as? MagpieReleaseEvent }
-            .filter { it.pubKey == publisher && it.isWellFormed() && module.key in it.moduleKeys() }
+            .mapNotNull { MagpieEvents.wrap(it) as? MavenReleaseEvent }
+            .filter { it.pubKey == publisher && it.isUsable() && module.key in it.moduleKeys() }
             .distinctBy { it.id }
             .sortedWith(RELEASE_ORDER)
             .distinctBy { it.version() }
@@ -155,11 +157,11 @@ public object WinnerSelection {
         events: Collection<Event>,
         module: ModuleId,
         publisher: HexKey,
-    ): Map<String, List<MagpieReleaseEvent>> =
+    ): Map<String, List<MavenReleaseEvent>> =
         events
             .asSequence()
-            .mapNotNull { MagpieEvents.wrap(it) as? MagpieReleaseEvent }
-            .filter { it.pubKey == publisher && module.key in it.moduleKeys() && it.isWellFormed() }
+            .mapNotNull { MagpieEvents.wrap(it) as? MavenReleaseEvent }
+            .filter { it.pubKey == publisher && module.key in it.moduleKeys() && it.isUsable() }
             .distinctBy { it.id }
             .sortedWith(RELEASE_ORDER)
             .groupBy { it.version()!! }
@@ -169,11 +171,11 @@ public object WinnerSelection {
         events: Collection<Event>,
         module: ModuleId,
         publisher: HexKey,
-    ): List<MagpieSnapshotEvent> =
+    ): List<MavenSnapshotEvent> =
         events
             .asSequence()
-            .mapNotNull { MagpieEvents.wrap(it) as? MagpieSnapshotEvent }
-            .filter { it.pubKey == publisher && it.isWellFormed() && module.key in it.moduleKeys() }
+            .mapNotNull { MagpieEvents.wrap(it) as? MavenSnapshotEvent }
+            .filter { it.pubKey == publisher && it.isUsable() && module.key in it.moduleKeys() }
             .sortedWith(SNAPSHOT_ORDER)
             .distinctBy { it.version() }
             .sortedWith(RELEASE_ORDER)

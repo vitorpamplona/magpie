@@ -21,10 +21,10 @@
 package com.vitorpamplona.magpie.gradle
 
 import com.vitorpamplona.magpie.spec.MagpieEvents
-import com.vitorpamplona.magpie.spec.MagpieReleaseEvent
 import com.vitorpamplona.magpie.spec.MagpieSpec
 import com.vitorpamplona.magpie.spec.Manifest
 import com.vitorpamplona.quartz.nip01Core.relay.filters.Filter
+import com.vitorpamplona.quartz.nipFCMavenRepositories.release.MavenReleaseEvent
 import java.io.File
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -182,7 +182,7 @@ class KmpEndToEndTest {
     @Test
     fun publishAndConsumeAMultiplatformLibrary() {
         builds.run(kmpLibrary("sample", "1.0.0"), "publishToNostr", env = builds.signerEnv)
-        val release = MagpieEvents.wrap(builds.relay.query(Filter(kinds = listOf(MagpieSpec.KIND_RELEASE))).single()) as MagpieReleaseEvent
+        val release = MagpieEvents.wrap(builds.relay.query(Filter(kinds = listOf(MagpieSpec.KIND_RELEASE))).single()) as MavenReleaseEvent
         // One release for the whole library: the root module plus one module per target.
         assertEquals(targets.size + 1, release.moduleKeys().size, release.moduleKeys().toString())
 
@@ -204,7 +204,7 @@ class KmpEndToEndTest {
         assertEquals(0, builds.relay.query(Filter(kinds = listOf(MagpieSpec.KIND_RELEASE))).size, "no release before close")
 
         builds.run(hostA, "closeNostrRelease", env = builds.signerEnv)
-        val release = MagpieEvents.wrap(builds.relay.query(Filter(kinds = listOf(MagpieSpec.KIND_RELEASE))).single()) as MagpieReleaseEvent
+        val release = MagpieEvents.wrap(builds.relay.query(Filter(kinds = listOf(MagpieSpec.KIND_RELEASE))).single()) as MavenReleaseEvent
         val manifest = Manifest.parse(builds.blossom.blobs.getValue(release.manifest()!!.sha256))
         assertEquals(targets.size + 1, manifest.artifacts.size, manifest.artifacts.toString())
         builds.run(kmpConsumer("kmp-app"), *compileTasks().toTypedArray())

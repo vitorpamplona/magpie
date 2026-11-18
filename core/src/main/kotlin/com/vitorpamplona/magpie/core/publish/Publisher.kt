@@ -30,8 +30,6 @@ import com.vitorpamplona.magpie.core.util.MagpieLog
 import com.vitorpamplona.magpie.core.util.StripedMutex
 import com.vitorpamplona.magpie.spec.EventVerification
 import com.vitorpamplona.magpie.spec.MagpieEvents
-import com.vitorpamplona.magpie.spec.MagpieReleaseEvent
-import com.vitorpamplona.magpie.spec.MagpieSnapshotEvent
 import com.vitorpamplona.magpie.spec.MagpieSpec
 import com.vitorpamplona.magpie.spec.Manifest
 import com.vitorpamplona.magpie.spec.PublicKeys
@@ -360,9 +358,9 @@ public class Publisher(
 
         val template: EventTemplate<*> =
             if (manifest.coordinate.isSnapshot) {
-                MagpieSnapshotEvent.build(manifest, manifestBlob.sha256, manifestBlob.size, servers = hints, createdAt = now())
+                MagpieEvents.snapshot(manifest, manifestBlob.sha256, manifestBlob.size, servers = hints, createdAt = now())
             } else {
-                MagpieReleaseEvent.build(manifest, manifestBlob.sha256, manifestBlob.size, servers = hints, createdAt = now())
+                MagpieEvents.release(manifest, manifestBlob.sha256, manifestBlob.size, servers = hints, createdAt = now())
             }
         val event = signChecked(template)
         val results = nostr.publish(relays, event)

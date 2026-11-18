@@ -30,7 +30,6 @@ import com.vitorpamplona.magpie.core.publish.Publisher
 import com.vitorpamplona.magpie.core.publish.RepoScanner
 import com.vitorpamplona.magpie.core.publish.SecretKeySigner
 import com.vitorpamplona.magpie.spec.MagpieEvents
-import com.vitorpamplona.magpie.spec.MagpieReleaseEvent
 import com.vitorpamplona.magpie.spec.MagpieSpec
 import com.vitorpamplona.magpie.testkit.FakeMavenRepo
 import com.vitorpamplona.magpie.testkit.InMemoryRelay
@@ -39,6 +38,7 @@ import com.vitorpamplona.quartz.nip01Core.core.Event
 import com.vitorpamplona.quartz.nip01Core.core.HexKey
 import com.vitorpamplona.quartz.nip01Core.relay.filters.Filter
 import com.vitorpamplona.quartz.nip01Core.signers.EventTemplate
+import com.vitorpamplona.quartz.nipFCMavenRepositories.release.MavenReleaseEvent
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
@@ -126,7 +126,7 @@ class AuditRegressionTest {
         world.blossom2.refuseAllUploads = true
         val result = world.publish(alice, FakeMavenRepo(world.dir("repo")).publish("1.0.0").dir, "1.0.0")
         assertTrue(result.signatures <= 3, "signatures: ${result.signatures}")
-        val release = MagpieEvents.wrap(world.relay.query(Filter(ids = listOf(result.eventId!!))).single()) as MagpieReleaseEvent
+        val release = MagpieEvents.wrap(world.relay.query(Filter(ids = listOf(result.eventId!!))).single()) as MavenReleaseEvent
         assertEquals(listOf(world.blossom.url), release.servers(), "only the server that holds everything is a hint")
     }
 
@@ -150,7 +150,7 @@ class AuditRegressionTest {
         )
         val (publisher, _) = world.publisher(alice)
         val result = runBlocking { publisher.close(PublishSettings(world.dir("x"), "com.example", "2.0.0", "lib", listOf(world.relay.url), partialDir = partials)) }
-        val release = MagpieEvents.wrap(world.relay.query(Filter(ids = listOf(result.eventId!!))).single()) as MagpieReleaseEvent
+        val release = MagpieEvents.wrap(world.relay.query(Filter(ids = listOf(result.eventId!!))).single()) as MavenReleaseEvent
         assertEquals(listOf(world.blossom.url), release.servers())
     }
 
@@ -211,7 +211,7 @@ class AuditRegressionTest {
         val scanned = RepoScanner.scan(repo.dir, "com.example", "1.0.0", "lib")
         scanned.files.values.forEach { world.blossom.put(it.readBytes()) }
         world.blossom.put(scanned.manifest.toBytes())
-        world.relay.add(alice.sign(MagpieReleaseEvent.build(scanned.manifest, servers = listOf("blossom.example.com", world.blossom.url), createdAt = 100)))
+        world.relay.add(alice.sign(MagpieEvents.release(scanned.manifest, servers = listOf("blossom.example.com", world.blossom.url), createdAt = 100)))
         world.stack(alice).use { assertEquals(200, it.get("com/example/lib-jvm/1.0.0/lib-jvm-1.0.0.jar").status) }
     }
 
@@ -288,7 +288,7 @@ class AuditRegressionTest {
             .filter { it.isFile }
             .forEach { world.blossom.put(it.readBytes()) }
         world.blossom.put(laterManifest.toBytes())
-        world.relay.add(alice.sign(MagpieReleaseEvent.build(laterManifest, servers = listOf(world.blossom.url), createdAt = System.currentTimeMillis() / 1000 + 100)))
+        world.relay.add(alice.sign(MagpieEvents.release(laterManifest, servers = listOf(world.blossom.url), createdAt = System.currentTimeMillis() / 1000 + 100)))
 
         val cache = world.dir("shared-cache")
         val pinsLater = File(world.root, "a.lock")

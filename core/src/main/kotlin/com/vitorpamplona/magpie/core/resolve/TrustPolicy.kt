@@ -28,10 +28,10 @@ import com.vitorpamplona.magpie.core.util.StripedMutex
 import com.vitorpamplona.magpie.spec.Coordinate
 import com.vitorpamplona.magpie.spec.LockFile
 import com.vitorpamplona.magpie.spec.LockedPublisher
-import com.vitorpamplona.magpie.spec.MagpieReleaseEvent
 import com.vitorpamplona.magpie.spec.PublicKeys
 import com.vitorpamplona.magpie.spec.ReleaseIdentity
 import com.vitorpamplona.quartz.nip01Core.core.HexKey
+import com.vitorpamplona.quartz.nipFCMavenRepositories.release.MavenReleaseEvent
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
@@ -289,7 +289,7 @@ public class TrustPolicy(
 
     public suspend fun recordRelease(
         coordinate: Coordinate,
-        release: MagpieReleaseEvent,
+        release: MavenReleaseEvent,
     ) {
         if (!lock.enabled) return
         val manifest = release.manifest()?.sha256 ?: return

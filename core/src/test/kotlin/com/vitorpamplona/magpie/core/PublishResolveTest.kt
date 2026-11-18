@@ -28,7 +28,7 @@ import com.vitorpamplona.magpie.core.util.Hashing
 import com.vitorpamplona.magpie.spec.ChecksumAlgorithm
 import com.vitorpamplona.magpie.spec.Coordinate
 import com.vitorpamplona.magpie.spec.LockFile
-import com.vitorpamplona.magpie.spec.MagpieReleaseEvent
+import com.vitorpamplona.magpie.spec.MagpieEvents
 import com.vitorpamplona.magpie.spec.MagpieSpec
 import com.vitorpamplona.magpie.spec.Manifest
 import com.vitorpamplona.magpie.spec.ManifestFile
@@ -151,7 +151,7 @@ class PublishResolveTest {
             com.vitorpamplona.magpie.core.publish.RepoScanner
                 .scan(other.dir, "com.example", "1.0.0", "lib")
                 .manifest
-        world.relay.add(alice.sign(MagpieReleaseEvent.build(manifest, createdAt = System.currentTimeMillis() / 1000 + 100)))
+        world.relay.add(alice.sign(MagpieEvents.release(manifest, createdAt = System.currentTimeMillis() / 1000 + 100)))
 
         world.stack(alice).use { stack ->
             val jar = stack.get("com/example/lib-jvm/1.0.0/lib-jvm-1.0.0.jar").bytes()
@@ -192,7 +192,7 @@ class PublishResolveTest {
             .filter { it.isFile }
             .forEach { world.blossom.put(it.readBytes()) }
         world.blossom.put(manifest.toBytes())
-        world.relay.add(alice.sign(MagpieReleaseEvent.build(manifest, servers = listOf(world.blossom.url), createdAt = 10)))
+        world.relay.add(alice.sign(MagpieEvents.release(manifest, servers = listOf(world.blossom.url), createdAt = 10)))
 
         world.stack(alice, cache = world.dir("cache-b")).use { stack ->
             assertContentEquals(
