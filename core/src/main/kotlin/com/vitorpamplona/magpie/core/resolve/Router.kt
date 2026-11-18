@@ -78,7 +78,7 @@ public sealed interface RouterResponse {
 /**
  * Maps a Maven repository path to bytes: `maven-metadata.xml` generated from events, artifact
  * files from manifests and Blossom, and every checksum sidecar computed locally. The local
- * resolver and the gateway both serve through this, so they serve the same bytes.
+ * resolver serves through this.
  */
 public class Router(
     private val resolver: Resolver,

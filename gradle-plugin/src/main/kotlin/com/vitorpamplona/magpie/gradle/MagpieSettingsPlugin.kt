@@ -24,7 +24,6 @@ import com.vitorpamplona.magpie.bridge.EngineConfig
 import org.gradle.api.GradleException
 import org.gradle.api.Plugin
 import org.gradle.api.artifacts.dsl.RepositoryHandler
-import org.gradle.api.artifacts.repositories.MavenArtifactRepository
 import org.gradle.api.initialization.Settings
 import org.gradle.api.initialization.resolve.RepositoriesMode
 import org.gradle.api.logging.Logging
@@ -222,9 +221,6 @@ internal fun groupRegex(
     val except = excluded.joinToString("|") { Regex.escape(it.removePrefix(group)) }
     return "^$q(?!(?:$except)(?:\\.|$))(\\..*)?$"
 }
-
-/** Repositories this plugin added, for tests and diagnostics. */
-internal fun MavenArtifactRepository.isMagpie(): Boolean = name.startsWith(MagpieSettingsPlugin.REPO_NAME)
 
 /** Just enough bech32 to turn an npub into hex at configuration time (no engine needed). */
 internal object Bech32 {

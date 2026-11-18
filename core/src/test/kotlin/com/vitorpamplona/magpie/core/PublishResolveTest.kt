@@ -321,6 +321,6 @@ class PublishResolveTest {
         val manifest = Manifest.parse(world.blossom.blobs.getValue(result.manifestSha256))
         assertEquals("com.example:lib:1.0.0", manifest.coordinate.toString())
         assertEquals(listOf("lib", "lib-jvm", "lib-linuxx64"), manifest.artifacts)
-        assertTrue(manifest.files.values.all { it is ManifestFile })
+        assertTrue(manifest.files.values.all { it.sha256.length == 64 && it.size > 0 }, manifest.files.toString())
     }
 }

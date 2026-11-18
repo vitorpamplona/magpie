@@ -2,7 +2,7 @@
 
 Magpie turns Nostr events and Blossom blobs into a Maven repository on demand. There is no
 server to run: a consumer's Gradle daemon runs the resolver, a publisher's Gradle build runs the
-publisher, and the optional gateway is the same resolver behind Ktor.
+publisher.
 
 ```
                 publishToNostr                                   settings plugin
@@ -25,7 +25,6 @@ publisher, and the optional gateway is the same resolver behind Ktor.
 | `bridge/` | Java interfaces between the plugin and the engine, JDK types only | — |
 | `core/` | The engine (JVM). `resolve/`: `RelayQuery`, `BlobFetcher`/`BlobStore`, `Resolver` (release/snapshot/manifest/blob lookups and caches), `TrustPolicy`/`LockStore`, `MetadataGenerator`, `ChecksumFiles`, `Router`, `LocalRepoServer`, `RepositoryMirror`. `publish/`: `RepoScanner`, `ModuleChecker`, `BlossomClient` (uploader), `MagpieSigner` (nsec, NIP-46), `Publisher` (publish, partial, close, server list). `engine/`: `MagpieEngineImpl` (the bridge entry point), `ResolverStack` | spec, Quartz, OkHttp, coroutines |
 | `gradle-plugin/` | `MagpieSettingsPlugin` (resolve), `MagpiePublishPlugin` (publish), `EngineLoader`, `MagpieResolverService` | bridge (embedded), core (nested jars) |
-| `gateway/` | Ktor app + Dockerfile around the same `Router`, with a group→npub allowlist | core |
 | `testkit/` | In-memory relay (Quartz `NostrServer` + in-memory SQLite, over Ktor websockets), in-memory Blossom (BUD-01/02/06), `TestBunker` (NIP-46 via Quartz's signer service), `FakeMavenRepo`, `TestIdentity` | spec, Quartz, Ktor |
 
 ### What Quartz provides, and what Magpie adds
@@ -145,15 +144,9 @@ The loader never checks the file system before it must: it probes by loading the
 and extracts atomically only if that fails. Gradle instruments plugin code during configuration,
 and a check there would become a configuration-cache input.
 
-## Gateway
-
-`gateway/` serves the same `Router` over Ktor for clients that can't run the plugin (Maven,
-sbt, a CI cache). Its trust policy is an allowlist of group→npub in its config: it doesn't ask
-domains, because it keeps no lock to hold their answers steady. Same caches, same bytes as the local resolver.
-
 ## Extension points
 
 - `TrustPolicy`/`Pin`: other ways to decide whose events count (web of trust, …).
 - `MagpieSigner`: other signers (NIP-55, hardware).
-- `Router`: other front ends (the gateway is one).
+- `Router`: other front ends (an HTTP service for Maven or sbt, say).
 - `RelayQuery`/`MagpieSpec`: more event kinds (timestamps, attestations).

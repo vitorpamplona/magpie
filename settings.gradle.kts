@@ -15,4 +15,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "magpie"
 
-include(":spec", ":bridge", ":core", ":gradle-plugin", ":gateway", ":testkit")
+include(":spec", ":bridge", ":core", ":gradle-plugin", ":testkit")

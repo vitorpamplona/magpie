@@ -89,7 +89,7 @@ version = "1.0.0"
 ```
 
 It checks that your domain names the signing key and that the version is new, uploads every file,
-and signs one release for the whole library. `--dry-run` checks everything without uploading or
+and signs one release for the whole library. `--check-only` checks everything without uploading or
 signing. A release can't be changed: fix a bad one by publishing a new version.
 
 A Kotlin Multiplatform library built on several CI hosts runs
@@ -101,7 +101,6 @@ once on one host, which signs the release once every host's files are in.
 - [docs/NIP-DRAFT.md](docs/NIP-DRAFT.md): the event format.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how resolution and publishing work.
 - [docs/OPEN-QUESTIONS.md](docs/OPEN-QUESTIONS.md): the design decisions and their trade-offs.
-- `gateway/`: the same resolver as a Docker service for Maven, sbt or a shared cache.
 - [CONTRIBUTING.md](CONTRIBUTING.md): building and testing.
 
 ## License

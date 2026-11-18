@@ -53,7 +53,7 @@ public object Http {
             .build()
 }
 
-/** Everything resolution needs, wired from a configuration map; shared by the plugin and the gateway. */
+/** Everything resolution needs, wired from a configuration map. */
 public class ResolverStack(
     /** A short hash of the configuration: the local server's URL prefix, so servers with different trust never mix. */
     public val configId: String,
@@ -72,7 +72,7 @@ public class ResolverStack(
     }
 
     public companion object {
-        /** "false" to skip the offline mirror (the gateway has no use for it). */
+        /** "false" to skip the offline mirror. */
         public const val MIRROR: String = "mirror"
 
         /** Testing hook: NIP-05 lookups go to this base URL (`{domain}` stands for the domain) instead of `https://<domain>`. */
