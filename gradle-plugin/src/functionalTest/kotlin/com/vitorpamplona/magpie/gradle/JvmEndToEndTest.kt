@@ -163,6 +163,19 @@ class JvmEndToEndTest {
     }
 
     @Test
+    fun publishingWorksWithTheConfigurationCache() {
+        // The Plugin Portal lists the publish plugin as configuration-cache compatible: storing,
+        // reusing (a dry run twice), and a real publish from the cache.
+        val lib = builds.javaLibrary("lib", "1.0.0")
+        builds.run(lib, "publishToNostr", "--dry-run", "--configuration-cache", env = builds.signerEnv)
+        val reused = builds.run(lib, "publishToNostr", "--dry-run", "--configuration-cache", env = builds.signerEnv)
+        assertTrue("Reusing configuration cache" in reused.output || "Configuration cache entry reused" in reused.output, reused.output)
+        builds.run(lib, "publishToNostr", "--configuration-cache", env = builds.signerEnv)
+        val app = builds.consumer("app", "com.example:greeter:1.0.0")
+        assertTrue("GREETING: hello from nostr" in builds.run(app, "run", "--configuration-cache").output)
+    }
+
+    @Test
     fun theDomainsRelaysNeedNoIndexRelays() {
         // Neither side names a relay: the domain's nostr.json lists where the key's events are.
         builds.wellKnownRelays[builds.publisher.pubKey] = listOf(builds.relay.url)

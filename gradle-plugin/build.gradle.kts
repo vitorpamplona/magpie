@@ -1,3 +1,4 @@
+import org.gradle.plugin.compatibility.compatibility
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.dsl.KotlinVersion
 import java.security.MessageDigest
@@ -105,16 +106,29 @@ gradlePlugin {
         create("magpieSettings") {
             id = "com.vitorpamplona.magpie"
             implementationClass = "com.vitorpamplona.magpie.gradle.MagpieSettingsPlugin"
-            displayName = "Magpie: resolve Maven artifacts from Nostr + Blossom"
-            description = "Resolves dependencies published as Nostr release events and Blossom blobs, pinned per group to a publisher key."
-            tags.set(listOf("nostr", "blossom", "maven", "dependencies", "repository"))
+            displayName = "Magpie: resolve Maven dependencies from Nostr and Blossom"
+            description =
+                "A settings plugin that serves libraries published on Nostr and Blossom to Gradle as a local Maven " +
+                "repository, with no registry or server to run. A group's domain vouches for its release key " +
+                "(releases@<domain> in nostr.json), a lock file pins that key and every resolved version's files, " +
+                "and every file is checked against its sha256. Each publisher's releases are read from its own " +
+                "relays. Works offline, with snapshots, dynamic versions and the configuration cache. Needs " +
+                "Gradle 8.8+ on Java 21. Setup: https://github.com/vitorpamplona/magpie#use-a-library-published-with-magpie"
+            tags.set(listOf("nostr", "blossom", "maven", "dependencies", "repository", "kotlin-multiplatform", "decentralized"))
+            compatibility { features { configurationCache.set(true) } }
         }
         create("magpiePublish") {
             id = "com.vitorpamplona.magpie.publish"
             implementationClass = "com.vitorpamplona.magpie.gradle.MagpiePublishPlugin"
-            displayName = "Magpie: publish Maven artifacts to Nostr + Blossom"
-            description = "Publishes maven-publish output as Blossom blobs and a signed Nostr release event."
-            tags.set(listOf("nostr", "blossom", "maven", "publishing"))
+            displayName = "Magpie: publish Maven artifacts to Nostr and Blossom"
+            description =
+                "Publishes a project's maven-publish publications (including every Kotlin Multiplatform target) as " +
+                "Blossom blobs and one signed, immutable Nostr release event, with two signatures per release from " +
+                "a NIP-46 bunker or a key. Checks that the group's domain vouches for the key, that every blob fits " +
+                "on a server and that the version is new before signing anything. Multi-host KMP builds upload " +
+                "per host and sign once. Setup: https://github.com/vitorpamplona/magpie#publish-a-library"
+            tags.set(listOf("nostr", "blossom", "maven", "publishing", "kotlin-multiplatform", "decentralized"))
+            compatibility { features { configurationCache.set(true) } }
         }
     }
 }
