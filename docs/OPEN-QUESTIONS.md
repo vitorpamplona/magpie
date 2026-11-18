@@ -109,9 +109,12 @@ are hard to reverse once releases exist.
 ## Publishing
 
 16. **Where to publish.** The publisher's own relays (NIP-65 write relays and the relays its
-    domain's `nostr.json` lists for it) plus `archivalRelays`. A key with no relays of its own
-    goes to the index relays, because that is where consumers look for such a key. At least one
-    relay must accept the event.
+    domain's `nostr.json` lists for it), and nowhere else: that is where consumers read them, so
+    a copy elsewhere would never be found, and a default list of big relays is the centralization
+    the outbox model avoids (0.1.x had an `archivalRelays` option; it is gone). More copies
+    belong in the key's kind 10002. A key with no relays of its own goes to the index relays,
+    because that is where consumers look for such a key. At least one relay must accept the
+    event.
 
 17. **Which servers go in `server` hints.** The servers that ended up holding every blob; if none
     holds all of them, every server that holds any.

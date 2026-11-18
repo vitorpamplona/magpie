@@ -62,8 +62,6 @@ public data class PublishSettings(
     val rootArtifact: String? = null,
     /** Where to look the publisher's relay list (kind 10002) up, besides its domain's relays. */
     val indexRelays: List<String>,
-    /** Archival relays that get every release besides the publisher's own relays. */
-    val publishRelays: List<String> = emptyList(),
     /** `--partial`: upload this host's blobs and write a partial manifest; sign no release. */
     val partial: Boolean = false,
     val partialDir: File? = null,
@@ -97,7 +95,6 @@ public data class ListSettings(
     /** The group whose domain may list relays for the key; null skips that lookup. */
     val group: String?,
     val indexRelays: List<String>,
-    val publishRelays: List<String> = emptyList(),
 )
 
 public class MissingServerListException(
@@ -116,7 +113,7 @@ public class VersionAlreadyReleasedException(
  * Publishes a local Maven repository as a Magpie release: hash every file, make sure each blob
  * can live on at least one of the publisher's Blossom servers (BUD-06), upload what's missing
  * under one BUD-02 authorization, upload the manifest, sign the release and send it to the
- * publisher's write relays and the archival relays. Nothing is signed until every check passes.
+ * publisher's own relays. Nothing is signed until every check passes.
  */
 public class Publisher(
     private val nostr: NostrIO,
@@ -209,15 +206,14 @@ public class Publisher(
     }
 
     /**
-     * Where an event of this key goes: its own relays (write relays and its domain's) and the
-     * archival relays. A key with no relays of its own is looked for on consumers' index relays,
+     * Where an event of this key goes: its own relays (write relays and its domain's), which is
+     * where consumers read it. A key with no relays of its own is looked for on consumers' index relays,
      * so its events go there instead, with a warning that names the fix.
      */
     private fun targets(
         pubKey: HexKey,
         homeRelays: List<String>,
         indexRelays: List<String>,
-        publishRelays: List<String>,
     ): List<String> {
         val home =
             homeRelays.ifEmpty {
@@ -228,9 +224,8 @@ public class Publisher(
                 )
                 RelayUrls.clean(indexRelays, max = Int.MAX_VALUE)
             }
-        val targets = (home + RelayUrls.clean(publishRelays, max = Int.MAX_VALUE)).distinct()
-        if (targets.isEmpty()) throw IllegalStateException("No relays to publish to: set indexRelays or archivalRelays. Nothing was signed.")
-        return targets
+        if (home.isEmpty()) throw IllegalStateException("No relays to publish to: set indexRelays. Nothing was signed.")
+        return home.distinct()
     }
 
     /** The relays [group]'s domain lists for the signer; empty when there is no check, or it fails (with a warning). */
@@ -253,7 +248,7 @@ public class Publisher(
 
         val domainRelays = keyCheck?.verify(settings.group, signer.pubKey()).orEmpty()
         val context = context(settings.indexRelays, domainRelays)
-        val relays = targets(context.pubKey, context.homeRelays, settings.indexRelays, settings.publishRelays)
+        val relays = targets(context.pubKey, context.homeRelays, settings.indexRelays)
         if (!manifest.coordinate.isSnapshot) refuseOverwrite(manifest, context, relays)
 
         val files =
@@ -295,7 +290,7 @@ public class Publisher(
 
         val domainRelays = keyCheck?.verify(settings.group, signer.pubKey()).orEmpty()
         val context = context(settings.indexRelays, domainRelays)
-        val relays = targets(context.pubKey, context.homeRelays, settings.indexRelays, settings.publishRelays)
+        val relays = targets(context.pubKey, context.homeRelays, settings.indexRelays)
         if (!manifest.coordinate.isSnapshot) refuseOverwrite(manifest, context, relays)
 
         // Every blob must already be on a server, at the size the manifest says.
@@ -551,7 +546,7 @@ public class Publisher(
         return Hosted(uploaded.get(), present)
     }
 
-    /** Publishes a kind 10063 Blossom server list to the signer's own relays (and the archival ones). */
+    /** Publishes a kind 10063 Blossom server list to the signer's own relays. */
     public suspend fun createServerList(
         servers: List<String>,
         settings: ListSettings,
@@ -560,7 +555,7 @@ public class Publisher(
         val pubKey = signer.pubKey()
         val domainRelays = RelayUrls.clean(domainRelaysLenient(settings.group))
         val (_, relayList) = readLists(pubKey, settings.indexRelays, domainRelays)
-        val relays = targets(pubKey, (RelayUrls.writeRelays(relayList) + domainRelays).distinct(), settings.indexRelays, settings.publishRelays)
+        val relays = targets(pubKey, (RelayUrls.writeRelays(relayList) + domainRelays).distinct(), settings.indexRelays)
         val tags = servers.map { arrayOf("server", it.trimEnd('/')) }.toTypedArray()
         val event = signChecked(EventTemplate<Event>(now(), MagpieSpec.KIND_BLOSSOM_SERVERS, tags, ""))
         val results = nostr.publish(relays, event)

@@ -58,9 +58,6 @@ abstract class MagpieEngineTask : DefaultTask() {
     @get:Input
     abstract val indexRelays: ListProperty<String>
 
-    @get:Input
-    abstract val archivalRelays: ListProperty<String>
-
     /** The group released: its domain vouches for the key and lists the key's relays. */
     @get:Input
     abstract val groupId: Property<String>
@@ -95,7 +92,6 @@ abstract class MagpieEngineTask : DefaultTask() {
             buildMap {
                 put(EngineConfig.INDEX_RELAYS, indexRelays.get().joinToString("\n"))
                 put(EngineConfig.GROUP, groupId.get())
-                put(EngineConfig.PUBLISH_RELAYS, archivalRelays.get().joinToString("\n"))
                 put(EngineConfig.RELEASE_KEY_CHECK, releaseKeyCheck.get())
                 nip05BaseUrl.orNull?.let { put(EngineConfig.NIP05_BASE_URL, it) }
                 System.getenv(bunkerEnv.get())?.takeIf { it.isNotBlank() }?.let { put(EngineConfig.BUNKER_URI, it) }

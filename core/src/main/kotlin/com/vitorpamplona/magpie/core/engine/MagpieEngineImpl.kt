@@ -124,7 +124,6 @@ public class MagpieEngineImpl : MagpieEngine {
                                     version = config.getValue(EngineConfig.VERSION),
                                     rootArtifact = config[EngineConfig.ARTIFACT]?.takeIf { it.isNotBlank() },
                                     indexRelays = config.list(EngineConfig.INDEX_RELAYS),
-                                    publishRelays = config.list(EngineConfig.PUBLISH_RELAYS),
                                     partial = config.flag(EngineConfig.PARTIAL),
                                     partialDir = config[EngineConfig.PARTIAL_DIR]?.takeIf { it.isNotBlank() }?.let(::File),
                                     partialName = config[EngineConfig.PARTIAL_NAME]?.takeIf { it.isNotBlank() } ?: "partial",
@@ -169,7 +168,6 @@ public class MagpieEngineImpl : MagpieEngine {
         ListSettings(
             group = config[EngineConfig.GROUP]?.takeIf { it.isNotBlank() },
             indexRelays = config.list(EngineConfig.INDEX_RELAYS),
-            publishRelays = config.list(EngineConfig.PUBLISH_RELAYS),
         )
 
     private fun signerFor(

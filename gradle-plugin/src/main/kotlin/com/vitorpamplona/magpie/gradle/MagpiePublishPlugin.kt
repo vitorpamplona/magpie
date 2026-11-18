@@ -38,7 +38,6 @@ import javax.inject.Inject
  * ```
  * magpie {
  *     indexRelays("wss://purplepag.es")           // where your relay list (kind 10002) is looked up (or -Pmagpie.indexRelays=…)
- *     archivalRelays("wss://archive.example.com") // published to besides your own relays
  *     signer { bunkerEnv.set("MAGPIE_BUNKER") }   // the default; or nsecEnv
  * }
  * ```
@@ -52,9 +51,6 @@ abstract class MagpiePublishExtension
          * own relays (write relays and the domain's); the index relays only when you have neither.
          */
         abstract val indexRelays: ListProperty<String>
-
-        /** Relays that receive every release in addition to the publisher's own relays. */
-        abstract val archivalRelays: ListProperty<String>
 
         /** The root artifactId; the Kotlin Multiplatform root module or the single publication by default. */
         abstract val rootArtifact: Property<String>
@@ -78,10 +74,6 @@ abstract class MagpiePublishExtension
 
         fun indexRelays(vararg urls: String) {
             indexRelays.addAll(urls.toList())
-        }
-
-        fun archivalRelays(vararg urls: String) {
-            archivalRelays.addAll(urls.toList())
         }
 
         fun signer(action: Action<MagpieSignerSpec>) {
@@ -122,12 +114,15 @@ class MagpiePublishPlugin : Plugin<Project> {
                 .map { list(it) }
                 .orElse(emptyList()),
         )
-        ext.archivalRelays.convention(
-            project.providers
-                .gradleProperty("magpie.archivalRelays")
-                .map { list(it) }
-                .orElse(emptyList()),
-        )
+        // Releases go to the key's own relays only (its kind 10002's write relays and its domain's):
+        // that's where clients read them. The extra-relay list 0.1.x took is gone; more copies
+        // belong in the key's kind 10002.
+        if (project.providers.gradleProperty("magpie.archivalRelays").isPresent) {
+            project.logger.warn(
+                "Magpie: magpie.archivalRelays is ignored: releases go to your key's own relays (its kind 10002 and nostr.json). " +
+                    "For more copies, add write relays to your kind 10002.",
+            )
+        }
         val repoDir = project.layout.buildDirectory.dir("magpie-repo")
         val publishing = project.extensions.getByType(PublishingExtension::class.java)
         publishing.repositories.maven {
@@ -159,7 +154,6 @@ class MagpiePublishPlugin : Plugin<Project> {
             task.cacheRoot.set(cacheRoot)
             task.indexRelays.set(ext.indexRelays)
             task.groupId.set(rootGroup)
-            task.archivalRelays.set(ext.archivalRelays)
             task.bunkerEnv.set(project.provider { ext.signer.bunkerEnv })
             task.nsecEnv.set(project.provider { ext.signer.nsecEnv })
             task.releaseKeyCheck.set(
