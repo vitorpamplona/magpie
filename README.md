@@ -1,14 +1,9 @@
-# Magpie
+# Magpie: Maven artifacts on Nostr
 
-**Maven artifacts on Nostr.**
-
-Magpie lets Gradle and Kotlin Multiplatform projects publish libraries to
-[Blossom](https://github.com/hzrd149/blossom) servers, signed with Nostr events, and use them as if
-they came from a normal Maven repository. There is no registry and no server to run. Releases are
-immutable, and every file is checked against its signature and hash.
-
-Requires Gradle 8.8 or newer, running on Java 21 or newer (your project can still compile for older
-Java with a toolchain).
+Magpie lets Gradle projects publish libraries to [Blossom](https://github.com/hzrd149/blossom) servers, 
+signed with Nostr events, and use them as if they came from a normal Maven repository. 
+There is no registry and no server to run. Releases are immutable, and every file is 
+checked against its signature and hash.
 
 ## Use a library
 
@@ -20,6 +15,7 @@ plugins {
 }
 
 magpie {
+    // trusts the release key at `releases@yourdomain.com` for this group and its subgroups.
     group("com.yourdomain")
 }
 ```
@@ -32,13 +28,14 @@ dependencies {
 }
 ```
 
-`group("com.yourdomain")` trusts the release key that `yourdomain.com` names as `releases` in its
-`/.well-known/nostr.json`, for that group and its subgroups. For a library whose group isn't a
-domain, pin the publisher's key instead and say where to find its relays:
+If NIP-05 is not available for the domain, you can pin the publisher's key instead and say where to find its relays:
 
 ```kotlin
 magpie {
-    group("org.other") { publisher("npub1…") }
+    group("org.other") {
+        publisher("npub1…")
+    }
+    // find user's relays via outbox
     indexRelays("wss://purplepag.es")
 }
 ```
@@ -58,7 +55,9 @@ of reaching it. If it ever fails, check with the publisher before editing it. In
    ```json
    {
      "names": { "releases": "<hex pubkey>" },
-     "relays": { "<hex pubkey>": ["wss://your.relay.com"] }
+     "relays": {
+       "<hex pubkey>": ["wss://your.relay.com"]
+     }
    }
    ```
 
@@ -69,13 +68,12 @@ of reaching it. If it ever fails, check with the publisher before editing it. In
    ./gradlew createNostrServerList --server=https://your.blossom.server
    ```
 
-3. **Give CI a signer.** Set `MAGPIE_BUNKER` to the key's NIP-46 `bunker://…` address. With
-   Amethyst as the signer, you approve each release on your phone while it publishes.
+3. **Give CI a signer.** Set `MAGPIE_BUNKER` to the key's NIP-46 `bunker://…` address or 
    `MAGPIE_NSEC` (an `nsec1…`) also works, but it puts the key itself in CI.
 
 ### Each release
 
-In the library's `build.gradle.kts` (any `maven-publish` setup, including Kotlin Multiplatform):
+In the library's `build.gradle.kts`: 
 
 ```kotlin
 plugins {
