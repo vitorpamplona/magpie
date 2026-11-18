@@ -129,6 +129,20 @@ class ReleaseLifecycleTest {
     }
 
     @Test
+    fun aServerThatWantsAuthorizationForThePreflightStillGetsTheUpload() {
+        // blossom.band answers an unsigned HEAD /upload with 401. That isn't a refusal: Magpie
+        // signs nothing before its checks pass, so the signed upload decides.
+        world.setUpPublisher(alice)
+        world.blossom.preflightNeedsAuth = true
+        val repo = FakeMavenRepo(world.dir("repo")).publish("1.0.0")
+        val (publisher, signer) = world.publisher(alice)
+        runBlocking { publisher.publish(PublishSettings(repo.dir, "com.example", "1.0.0", "lib", listOf(world.relay.url))) }
+        assertTrue(world.blossom.preflights.get() > 0)
+        assertTrue(world.blossom.uploads.get() > 0)
+        assertEquals(2, signer.signatures)
+    }
+
+    @Test
     fun preflightLetsASecondServerHostWhatTheFirstRefuses() {
         world.setUpPublisher(alice, listOf(world.blossom.url, world.blossom2.url))
         world.blossom.maxUploadSize = 100
