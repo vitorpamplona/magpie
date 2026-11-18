@@ -1,6 +1,6 @@
 // The JVM engine: resolution (relays, Blossom, caches, Maven metadata, the HTTP router) and
 // publishing (scan, upload, sign, publish). It runs inside an isolated class loader in the Gradle
-// daemon (resolution) or in a worker process (publishing), and inside the gateway.
+// daemon (resolution) or in a worker process (publishing).
 plugins {
     alias(libs.plugins.kotlinJvm)
 }

@@ -101,7 +101,6 @@ once on one host, which signs the release once every host's files are in.
 - [docs/NIP-DRAFT.md](docs/NIP-DRAFT.md): the event format.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how resolution and publishing work.
 - [docs/OPEN-QUESTIONS.md](docs/OPEN-QUESTIONS.md): the design decisions and their trade-offs.
-- `gateway/`: the same resolver as a Docker service for Maven, sbt or a shared cache.
 - [CONTRIBUTING.md](CONTRIBUTING.md): building and testing.
 
 ## License

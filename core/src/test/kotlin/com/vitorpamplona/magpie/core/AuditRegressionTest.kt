@@ -236,7 +236,7 @@ class AuditRegressionTest {
         world.setUpPublisher(alice)
         val repo = FakeMavenRepo(world.dir("repo")).publish("1.0.0")
         world.publish(alice, repo.dir, "1.0.0")
-        // Without the offline mirror (as in the gateway): with it, the first request for a file
+        // Without the offline mirror: with it, the first request for a file
         // downloads it once so the mirror has it.
         world.stack(alice, extra = mapOf(com.vitorpamplona.magpie.core.engine.ResolverStack.MIRROR to "false")).use { stack ->
             val path = "com/example/lib-jvm/1.0.0/lib-jvm-1.0.0.jar"
