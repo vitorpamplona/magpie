@@ -43,7 +43,6 @@ public data class VersionEntry(
  */
 public object MetadataGenerator {
     private val TIMESTAMP = DateTimeFormatter.ofPattern("yyyyMMddHHmmss").withZone(ZoneOffset.UTC)
-    private val SNAPSHOT_TIMESTAMP = DateTimeFormatter.ofPattern("yyyyMMdd.HHmmss").withZone(ZoneOffset.UTC)
 
     public fun formatTimestamp(unixSeconds: Long): String = TIMESTAMP.format(Instant.ofEpochSecond(unixSeconds))
 
@@ -130,9 +129,6 @@ public object MetadataGenerator {
             append("</metadata>\n")
         }
     }
-
-    /** `20240102.030405` for a Unix time, the form snapshot stamps use. */
-    public fun snapshotTimestamp(unixSeconds: Long): String = SNAPSHOT_TIMESTAMP.format(Instant.ofEpochSecond(unixSeconds))
 
     private fun xml(value: String): String =
         value

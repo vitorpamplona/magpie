@@ -183,9 +183,7 @@ public class TrustPolicy(
                     }
                 }
 
-                is Pin.Key -> {
-                    Unit
-                }
+                is Pin.Key -> {}
             }
         }
     }

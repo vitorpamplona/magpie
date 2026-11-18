@@ -51,17 +51,6 @@ public interface MagpieLog {
 
                 override fun info(message: String) {}
             }
-
-        public val STDERR: MagpieLog =
-            object : MagpieLog {
-                override fun error(message: String) = System.err.println("[magpie] ERROR $message")
-
-                override fun warn(message: String) = System.err.println("[magpie] WARN $message")
-
-                override fun lifecycle(message: String) = System.err.println("[magpie] $message")
-
-                override fun info(message: String) = System.err.println("[magpie] $message")
-            }
     }
 }
 
