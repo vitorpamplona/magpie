@@ -43,13 +43,27 @@ public fun ModuleId.toMavenModule(): MavenModule = MavenModule(group, artifact)
 public fun MavenPublication.moduleIds(): List<ModuleId> = moduleKeys().mapNotNull { ModuleId.parseOrNull(it) }
 
 /** The root coordinate, when it is safe as a path. */
-public fun MavenPublication.rootCoordinate(): Coordinate? = coordinate()?.let { Coordinate.parseOrNull(it.toString()) }
+public fun MavenPublication.rootCoordinate(): Coordinate? {
+    val root = coordinate() ?: return null
+    if (!isValidGroup(root.groupId) || !isValidSegment(root.artifactId) || !isValidSegment(root.version)) return null
+    return Coordinate(root.groupId, root.artifactId, root.version)
+}
 
-/** Whether this event is a candidate for [module] at [version]. */
+/**
+ * Whether this event is a candidate for [module] at [version]: its version (the first `v`, as
+ * [MavenPublication.version] reads it) is [version] and a `j` names [module]. A later `v` claims
+ * nothing; Quartz 2.19.0's [MavenPublication.covers] accepts any `v`, so it is not used here.
+ */
+public fun MavenPublication.coversExactly(
+    module: MavenModule,
+    version: String,
+): Boolean = version() == version && module.key in moduleKeys()
+
+/** [coversExactly] for Magpie's [ModuleId]. */
 public fun MavenPublication.covers(
     module: ModuleId,
     version: String,
-): Boolean = covers(module.toMavenModule(), version)
+): Boolean = coversExactly(module.toMavenModule(), version)
 
 /**
  * NIP-FC's [MavenPublication.isWellFormed] plus what Magpie needs before it trusts the event with

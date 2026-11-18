@@ -71,4 +71,14 @@ class BunkerClientKeyTest {
         assertNotEquals(a, b)
         assertEquals(64 + ".key".length, a.name.length)
     }
+
+    @Test
+    fun aKeyAnotherTaskWroteIsKept() {
+        val dir = Files.createTempDirectory("magpie").toFile()
+        val file = BunkerSigner.clientKeyFile(dir, "bunker://$remote")
+        val theirs = BunkerSigner.clientKey(file, log)
+        // A second task that found no file when it looked still ends on the key the file holds.
+        assertEquals(theirs.pubKey.toList(), BunkerSigner.clientKey(file, log).pubKey.toList())
+        assertEquals(listOf(file.name), file.parentFile.list()!!.toList())
+    }
 }

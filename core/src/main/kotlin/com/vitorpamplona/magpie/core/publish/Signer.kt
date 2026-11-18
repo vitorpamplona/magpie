@@ -37,6 +37,10 @@ import com.vitorpamplona.quartz.nip46RemoteSigner.signer.NostrSignerRemote
 import com.vitorpamplona.quartz.utils.Hex
 import kotlinx.coroutines.withTimeout
 import java.io.File
+import java.io.IOException
+import java.nio.file.FileAlreadyExistsException
+import java.nio.file.Files
+import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -157,8 +161,9 @@ public class BunkerSigner(
         }
 
         /**
-         * The client key in [file], made (readable by the owner only) when it is missing or
-         * unreadable. Tasks that race to make it end up on whichever key the file holds.
+         * The client key in [file], made when it is missing or unreadable. The key is written to
+         * a temp file only its owner can read and linked into place, which fails if another task
+         * got there first: racing tasks all end up on the key the file holds.
          */
         internal fun clientKey(
             file: File?,
@@ -166,16 +171,46 @@ public class BunkerSigner(
         ): KeyPair {
             if (file == null) return KeyPair()
             read(file)?.let { return it }
+            Files2.ensureDir(file.parentFile)
             val fresh = KeyPair()
-            Files2.writeAtomically(file, fresh.privKey!!.toHexKey().toByteArray())
-            val ownerOnly =
-                file.setReadable(false, false) &&
-                    file.setReadable(true, true) &&
-                    file.setWritable(false, false) &&
-                    file.setWritable(true, true)
-            if (!ownerOnly) log.warn("Magpie: could not make $file readable by its owner only")
+            val tmp = ownerOnlyTempFile(file.parentFile, log)
+            try {
+                tmp.writeText(fresh.privKey!!.toHexKey())
+                // A file that holds no key (corrupt, truncated) is replaced.
+                if (file.exists() && read(file) == null && !file.delete()) log.warn("Magpie: could not replace the unreadable $file")
+                try {
+                    Files.createLink(file.toPath(), tmp.toPath())
+                } catch (e: FileAlreadyExistsException) {
+                    // Another task made it first: use its key.
+                } catch (e: UnsupportedOperationException) {
+                    Files2.moveAtomically(tmp, file)
+                } catch (e: IOException) {
+                    // No hard links on this file system.
+                    Files2.moveAtomically(tmp, file)
+                }
+            } finally {
+                if (tmp.exists() && !tmp.delete()) tmp.deleteOnExit()
+            }
             return read(file) ?: fresh
         }
+
+        private fun ownerOnlyTempFile(
+            dir: File,
+            log: MagpieLog,
+        ): File =
+            try {
+                Files.createTempFile(dir.toPath(), "client", ".tmp", PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"))).toFile()
+            } catch (e: UnsupportedOperationException) {
+                // Not POSIX (Windows): restrict it before anything is written.
+                File.createTempFile("client", ".tmp", dir).also { tmp ->
+                    val ownerOnly =
+                        tmp.setReadable(false, false) &&
+                            tmp.setReadable(true, true) &&
+                            tmp.setWritable(false, false) &&
+                            tmp.setWritable(true, true)
+                    if (!ownerOnly) log.warn("Magpie: could not make $tmp readable by its owner only")
+                }
+            }
 
         private fun read(file: File): KeyPair? {
             if (!file.isFile) return null

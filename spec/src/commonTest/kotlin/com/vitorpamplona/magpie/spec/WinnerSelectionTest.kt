@@ -239,4 +239,18 @@ class WinnerSelectionTest {
         assertNull(ReleaseIdentity.hostOf("1.0.0.127"))
         assertEquals("example.com", ReleaseIdentity.hostOf("com.example"))
     }
+
+    @Test
+    fun aSecondVersionTagDoesNotClaimThatVersion() {
+        // version() reads the first `v`; covers() must agree, or this 1.0 release (by the trusted
+        // key, earliest) would be picked for 2.0 and win that version's selection.
+        val one = release(alice, "1.0", 100)
+        val tags = one.tags.flatMap { if (it[0] == MagpieSpec.TAG_VERSION) listOf(it, arrayOf(MagpieSpec.TAG_VERSION, "2.0")) else listOf(it) }.toTypedArray()
+        val both = alice.signed(EventTemplate<MavenReleaseEvent>(100, MagpieSpec.KIND_RELEASE, tags, "")) as MavenReleaseEvent
+        val two = release(alice, "2.0", 200, seed = 'b')
+        assertEquals("1.0", both.version())
+        assertFalse(both.covers(module, "2.0"))
+        val selected = WinnerSelection.release(listOf(both, two), module, "2.0", alice.pubKey)
+        assertEquals(two.id, (selected as ReleaseSelection.Found).release.id)
+    }
 }
