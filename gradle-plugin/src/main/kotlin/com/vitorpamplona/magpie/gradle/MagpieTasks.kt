@@ -171,7 +171,8 @@ abstract class PublishToNostrTask : MagpieEngineTask() {
         partialName.set(value)
     }
 
-    @Option(option = "dry-run", description = "Check everything (server lists, overwrite, preflight) but upload and sign nothing.")
+    // Not "dry-run": Gradle owns --dry-run and, given it, skips every task without running it.
+    @Option(option = "check-only", description = "Check everything (server lists, overwrite, preflight) but upload and sign nothing.")
     fun setDryRunFlag(value: Boolean) {
         dryRun.set(value)
     }

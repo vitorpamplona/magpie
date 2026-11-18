@@ -165,10 +165,12 @@ class JvmEndToEndTest {
     @Test
     fun publishingWorksWithTheConfigurationCache() {
         // The Plugin Portal lists the publish plugin as configuration-cache compatible: storing,
-        // reusing (a dry run twice), and a real publish from the cache.
+        // reusing (a check-only run twice), and a real publish from the cache.
         val lib = builds.javaLibrary("lib", "1.0.0")
-        builds.run(lib, "publishToNostr", "--dry-run", "--configuration-cache", env = builds.signerEnv)
-        val reused = builds.run(lib, "publishToNostr", "--dry-run", "--configuration-cache", env = builds.signerEnv)
+        val stored = builds.run(lib, "publishToNostr", "--check-only", "--configuration-cache", env = builds.signerEnv)
+        // The task ran its checks: Gradle's own --dry-run would skip it and print nothing of Magpie's.
+        assertTrue("checks passed, nothing uploaded or signed" in stored.output, stored.output)
+        val reused = builds.run(lib, "publishToNostr", "--check-only", "--configuration-cache", env = builds.signerEnv)
         assertTrue("Reusing configuration cache" in reused.output || "Configuration cache entry reused" in reused.output, reused.output)
         builds.run(lib, "publishToNostr", "--configuration-cache", env = builds.signerEnv)
         val app = builds.consumer("app", "com.example:greeter:1.0.0")
