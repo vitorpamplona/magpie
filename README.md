@@ -43,8 +43,10 @@ magpie {
 }
 ```
 
-Commit `gradle/magpie.lock`. It records the trusted key and the exact files of every version you
-resolved, and fails the build if either changes later.
+Commit `gradle/magpie.lock` to git, like any lock file. It pins each publisher's key and the exact
+files of every version you use, so a hijacked domain or a forged release fails your build instead
+of reaching it. If it ever fails, check with the publisher before editing it. In CI, add
+`-Pmagpie.frozenLock=true` so builds only use what's already in the committed lock.
 
 ## Publish a library
 
