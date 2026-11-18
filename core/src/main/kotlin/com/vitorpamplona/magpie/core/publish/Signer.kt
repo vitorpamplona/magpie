@@ -23,11 +23,11 @@ package com.vitorpamplona.magpie.core.publish
 import com.vitorpamplona.crypto.sha2.sha256
 import com.vitorpamplona.magpie.core.nostr.NostrIO
 import com.vitorpamplona.magpie.core.util.Files2
-import com.vitorpamplona.quartz.nip01Core.core.toHexKey
 import com.vitorpamplona.magpie.core.util.MagpieLog
 import com.vitorpamplona.magpie.spec.MagpieEvents
 import com.vitorpamplona.quartz.nip01Core.core.Event
 import com.vitorpamplona.quartz.nip01Core.core.HexKey
+import com.vitorpamplona.quartz.nip01Core.core.toHexKey
 import com.vitorpamplona.quartz.nip01Core.crypto.KeyPair
 import com.vitorpamplona.quartz.nip01Core.signers.EventTemplate
 import com.vitorpamplona.quartz.nip01Core.signers.NostrSigner
