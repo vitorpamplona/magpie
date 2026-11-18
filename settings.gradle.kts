@@ -10,7 +10,7 @@ pluginManagement {
 // names, and gradle/magpie.lock pins it. The plugin this repo builds embeds them in its jar, so its
 // users never resolve them.
 plugins {
-    id("com.vitorpamplona.magpie") version "0.1.1"
+    id("com.vitorpamplona.magpie") version "0.2.0"
 }
 
 magpie {
