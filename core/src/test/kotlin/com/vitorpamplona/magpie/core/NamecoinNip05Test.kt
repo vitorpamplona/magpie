@@ -20,12 +20,18 @@
  */
 package com.vitorpamplona.magpie.core
 
+import com.vitorpamplona.magpie.core.publish.ReleaseKeyCheck
+import com.vitorpamplona.magpie.core.publish.ReleaseKeyMismatchException
 import com.vitorpamplona.magpie.core.resolve.BoundedNamecoinClient
 import com.vitorpamplona.magpie.core.resolve.DispatchingNip05Resolver
+import com.vitorpamplona.magpie.core.resolve.GroupRule
+import com.vitorpamplona.magpie.core.resolve.LockStore
+import com.vitorpamplona.magpie.core.resolve.MagpieSecurityException
 import com.vitorpamplona.magpie.core.resolve.NamecoinNip05Resolver
 import com.vitorpamplona.magpie.core.resolve.Nip05Answer
 import com.vitorpamplona.magpie.core.resolve.Nip05Resolver
 import com.vitorpamplona.magpie.core.resolve.RelayUrls
+import com.vitorpamplona.magpie.core.resolve.TrustPolicy
 import com.vitorpamplona.magpie.testkit.TestIdentity
 import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.ElectrumxServer
 import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.IElectrumXClient
@@ -37,11 +43,15 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import java.io.File
+import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
@@ -92,7 +102,7 @@ class NamecoinNip05Test {
         }
 
     @Test
-    fun missingNameAndMissingExactEntryAreAbsent() =
+    fun missingNameIsAbsentButAmbiguousExistingRecordsAreUndecided() =
         runTest {
             val missing = FakeElectrumX()
             missing.lookup = { name -> throw NamecoinLookupException.NameNotFound(name) }
@@ -104,12 +114,65 @@ class NamecoinNip05Test {
 
             val noExact = FakeElectrumX()
             noExact.register("d/example", """{"nostr":{"names":{"alice":"$alice"}}}""")
-            assertEquals(Nip05Answer.Absent, resolver(noExact).lookup("releases@example.bit"))
+            assertIs<Nip05Answer.Unreachable>(resolver(noExact).lookup("releases@example.bit"))
 
             val noMap = FakeElectrumX()
             noMap.register("d/example", """{"nostr":{"names":{"releases":"$alice"}}}""")
-            assertEquals(Nip05Answer.Absent, resolver(noMap).lookup("releases@quartz.example.bit"))
+            assertIs<Nip05Answer.Unreachable>(resolver(noMap).lookup("releases@quartz.example.bit"))
         }
+
+    @Test
+    fun malformedChildEntriesNeverAuthorizeAValidParent() {
+        val children =
+            linkedMapOf(
+                "invalid hex" to """{"nostr":{"names":{"releases":"not-a-key"}}}""",
+                "object entry" to """{"nostr":{"names":{"releases":{"hex":"$alice"}}}}""",
+                "numeric entry" to """{"nostr":{"names":{"releases":42}}}""",
+                "array names" to """{"nostr":{"names":["$alice"]}}""",
+                "string names" to """{"nostr":{"names":"$alice"}}""",
+                "array nostr" to """{"nostr":["$alice"]}""",
+            )
+        children.forEach { (label, child) ->
+            val client = FakeElectrumX()
+            client.register(
+                "d/example",
+                """{"map":{"quartz":$child},"nostr":{"names":{"releases":"$alice"}}}""",
+            )
+            val adapted = resolver(client)
+            val asked = mutableListOf<String>()
+            val recording =
+                Nip05Resolver { identifier ->
+                    asked += identifier
+                    adapted.lookup(identifier)
+                }
+            val caseDir = Files.createTempDirectory("magpie-namecoin-malformed").toFile()
+            val lockFile = File(caseDir, "magpie.lock")
+            try {
+                val policy =
+                    TrustPolicy(
+                        listOf(GroupRule.parse("bit.example.quartz=domain")),
+                        LockStore(lockFile, false, RecordingLog()),
+                        recording,
+                        false,
+                        RecordingLog(),
+                    )
+                assertFailsWith<MagpieSecurityException>(label) {
+                    runBlocking { policy.publisherFor("bit.example.quartz") }
+                }
+                assertEquals(listOf("releases@quartz.example.bit"), asked, "$label consumer parent lookup")
+                assertFalse(lockFile.exists(), "$label consumer wrote a lock")
+
+                asked.clear()
+                assertFailsWith<ReleaseKeyMismatchException>(label) {
+                    runBlocking { ReleaseKeyCheck(recording).verify("bit.example.quartz", alice) }
+                }
+                assertEquals(listOf("releases@quartz.example.bit"), asked, "$label publisher parent lookup")
+                assertFalse(lockFile.exists(), "$label publisher wrote a lock")
+            } finally {
+                caseDir.deleteRecursively()
+            }
+        }
+    }
 
     @Test
     fun failedImportsDelegatesAndMalformedMapsAreUnreachable() =

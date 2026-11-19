@@ -25,8 +25,14 @@ import com.vitorpamplona.magpie.bridge.EngineConfig
 import com.vitorpamplona.magpie.core.engine.Http
 import com.vitorpamplona.magpie.core.engine.ResolverStack
 import com.vitorpamplona.magpie.core.publish.ReleaseKeyCheck
+import com.vitorpamplona.magpie.core.publish.ReleaseKeyMismatchException
+import com.vitorpamplona.magpie.core.resolve.GroupRule
+import com.vitorpamplona.magpie.core.resolve.LockStore
+import com.vitorpamplona.magpie.core.resolve.MagpieSecurityException
 import com.vitorpamplona.magpie.core.resolve.Nip05Answer
+import com.vitorpamplona.magpie.core.resolve.Nip05Resolver
 import com.vitorpamplona.magpie.core.resolve.Nip05ResolverFactory
+import com.vitorpamplona.magpie.core.resolve.TrustPolicy
 import com.vitorpamplona.magpie.core.resolve.parseElectrumxServers
 import com.vitorpamplona.magpie.testkit.TestIdentity
 import kotlinx.coroutines.runBlocking
@@ -36,6 +42,7 @@ import java.io.File
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.nio.file.Files
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -185,6 +192,73 @@ class NamecoinFactoryTest {
             }
         } finally {
             server.stop(0)
+        }
+    }
+
+    @Test
+    fun malformedSuccessfulCoreResponsesNeverAuthorizeAValidParent() {
+        val malformed =
+            linkedMapOf(
+                "missing result" to """{"error":null}""",
+                "null result" to """{"result":null,"error":null}""",
+                "scalar result" to """{"result":"unexpected","error":null}""",
+                "missing value" to """{"result":{"name":"d/example","expired":false},"error":null}""",
+                "null value" to """{"result":{"name":"d/example","value":null,"expired":false},"error":null}""",
+                "object value" to """{"result":{"name":"d/example","value":{},"expired":false},"error":null}""",
+                "numeric value" to """{"result":{"name":"d/example","value":42,"expired":false},"error":null}""",
+                "array envelope" to """[]""",
+            )
+        val record = """{"nostr":{"names":{"releases":"$alice"}}}"""
+        val success = """{"result":{"name":"d/example","value":${JsonPrimitive(record)},"expired":false},"error":null}"""
+        val http = Http.client()
+        try {
+            malformed.entries.forEachIndexed { index, (label, broken) ->
+                val calls = AtomicInteger()
+                val (server, url) =
+                    rpcServer {
+                        if (calls.incrementAndGet() == 1) 200 to broken else 200 to success
+                    }
+                val lockFile = File(dir, "malformed-$index.lock")
+                try {
+                    fun recording(asked: MutableList<String>): Nip05Resolver {
+                        val delegate = Nip05ResolverFactory.create(http, config(url)) { null }
+                        return Nip05Resolver { identifier ->
+                            asked += identifier
+                            delegate.lookup(identifier)
+                        }
+                    }
+
+                    val consumerAsked = mutableListOf<String>()
+                    val policy =
+                        TrustPolicy(
+                            listOf(GroupRule.parse("bit.example.quartz=domain")),
+                            LockStore(lockFile, false, RecordingLog()),
+                            recording(consumerAsked),
+                            false,
+                            RecordingLog(),
+                        )
+                    assertFailsWith<MagpieSecurityException>(label) {
+                        runBlocking { policy.publisherFor("bit.example.quartz") }
+                    }
+                    assertEquals(listOf("releases@quartz.example.bit"), consumerAsked, "$label consumer parent lookup")
+                    assertEquals(1, calls.get(), "$label consumer Core request count")
+                    assertFalse(lockFile.exists(), "$label consumer wrote a lock")
+
+                    calls.set(0)
+                    val publisherAsked = mutableListOf<String>()
+                    assertFailsWith<ReleaseKeyMismatchException>(label) {
+                        runBlocking { ReleaseKeyCheck(recording(publisherAsked)).verify("bit.example.quartz", alice) }
+                    }
+                    assertEquals(listOf("releases@quartz.example.bit"), publisherAsked, "$label publisher parent lookup")
+                    assertEquals(1, calls.get(), "$label publisher Core request count")
+                    assertFalse(lockFile.exists(), "$label publisher wrote a lock")
+                } finally {
+                    server.stop(0)
+                }
+            }
+        } finally {
+            http.dispatcher.executorService.shutdown()
+            http.connectionPool.evictAll()
         }
     }
 

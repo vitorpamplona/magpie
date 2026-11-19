@@ -35,9 +35,16 @@ magpie {
 }
 ```
 
-This tries `releases@quartz.example.bit`, then `releases@example.bit`. Quartz handles `map`,
-`import`, and `delegate` traversal. Only authoritative absence advances to a parent candidate.
-Malformed records, failed traversal, timeouts, and unreachable backends remain undecided.
+This tries `releases@quartz.example.bit`, then `releases@example.bit` only after an authoritative
+missing or expired name. Quartz handles `map`, `import`, and `delegate` traversal. Malformed
+records, failed traversal, timeouts, and unreachable backends remain undecided.
+
+Quartz 2.19.0 reports `NoNostrField` both when an existing record has no exact `releases` entry
+and when its `nostr`, `names`, or entry value is malformed. Magpie therefore treats every such
+outcome as undecided, not absent. Until Quartz distinguishes these cases, parent fallback is
+temporarily unavailable for an existing child record without `releases` or without the selected
+`map` entry. This intentional fail-closed restriction prevents a malformed child from authorizing
+a parent key during first-use trust or publication.
 
 A legacy DNS-based group is never silently mapped to a `.bit` name. Declare that trust explicitly:
 

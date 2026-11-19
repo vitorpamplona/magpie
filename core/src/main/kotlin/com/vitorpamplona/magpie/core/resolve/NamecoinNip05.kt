@@ -24,6 +24,7 @@ import com.vitorpamplona.magpie.spec.ReleaseIdentity
 import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.IElectrumXClient
 import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.NameShowResult
 import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.NamecoinLookupException
+import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.NamecoinNameBackend
 import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.NamecoinNameResolver
 import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.NamecoinResolveOutcome
 import kotlinx.coroutines.CancellationException
@@ -31,8 +32,10 @@ import java.net.URI
 
 /**
  * Adapts Quartz's detailed Namecoin result to Magpie's trust decision. Only a definite missing
- * name or missing exact entry is absent. Every traversal, parse, transport, and timeout failure
- * stays undecided so a parent-domain key cannot replace a failed child answer.
+ * name is absent. Quartz 2.19.0 uses NoNostrField for both a missing exact entry and a malformed
+ * entry, so both stay undecided until Quartz can distinguish them. This temporarily sacrifices
+ * parent fallback for an existing record without an exact entry, rather than trusting a parent
+ * after a malformed child answer.
  */
 public class NamecoinNip05Resolver internal constructor(
     private val resolveDetailed: suspend (String) -> NamecoinResolveOutcome,
@@ -63,9 +66,7 @@ public class NamecoinNip05Resolver internal constructor(
                 }
             }
 
-            is NamecoinResolveOutcome.NameNotFound,
-            is NamecoinResolveOutcome.NoNostrField,
-            -> Nip05Answer.Absent
+            is NamecoinResolveOutcome.NameNotFound -> Nip05Answer.Absent
 
             else -> Nip05Answer.Unreachable(outcome.reason(identifier))
         }
@@ -121,6 +122,29 @@ internal class BoundedNamecoinClient(
             )
         }
         return result
+    }
+}
+
+/**
+ * Quartz 2.19.0 returns null when a successful Core RPC result is not an object or has no string
+ * value. Null is not authoritative name absence. Keep malformed responses ahead of the optional
+ * ElectrumX transport fallback, which is used only for an explicit ServersUnreachable failure.
+ */
+internal class CoreRpcNamecoinClient(
+    private val core: NamecoinNameBackend,
+    private val electrumxFallback: IElectrumXClient? = null,
+) : IElectrumXClient {
+    override suspend fun nameShowWithFallback(
+        identifier: String,
+        servers: List<com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.ElectrumxServer>,
+    ): NameShowResult? {
+        try {
+            return core.nameShow(identifier)
+                ?: throw IllegalStateException("Namecoin Core RPC returned a malformed successful name_show result")
+        } catch (e: NamecoinLookupException.ServersUnreachable) {
+            if (electrumxFallback == null) throw e
+            return electrumxFallback.nameShowWithFallback(identifier, servers)
+        }
     }
 }
 

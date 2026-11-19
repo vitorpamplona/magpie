@@ -21,14 +21,11 @@
 package com.vitorpamplona.magpie.core.resolve
 
 import com.vitorpamplona.magpie.bridge.EngineConfig
-import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.CompositeNamecoinBackend
 import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.ElectrumXClient
-import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.ElectrumxNameBackend
 import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.ElectrumxServer
 import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.IElectrumXClient
 import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.NamecoinCoreRpcClient
 import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.NamecoinCoreRpcConfig
-import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.NamecoinFallbackPolicy
 import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.NamecoinNameResolver
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
@@ -90,12 +87,7 @@ public object Nip05ResolverFactory {
                                 ),
                             )
                         }
-                    CompositeNamecoinBackend(
-                        primary = core,
-                        customElectrumx = electrumClient?.let { ElectrumxNameBackend(it) { servers } },
-                        policy = NamecoinFallbackPolicy(fallbackToCustomElectrumx = fallback),
-                        isPrimaryCoreRpc = true,
-                    )
+                    CoreRpcNamecoinClient(core, electrumClient.takeIf { fallback })
                 }
 
                 EngineConfig.NAMECOIN_BACKEND_ELECTRUMX -> electrumClient!!
