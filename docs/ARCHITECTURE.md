@@ -105,18 +105,21 @@ runs in a worker process:
 5. Every server is asked `HEAD /<sha256>` for every blob; missing ones get a BUD-06
    `HEAD /upload` preflight. A blob no server would take fails the publish, **before anything is
    signed**.
-6. Kind 24242 authorizations covering the missing blobs (and the manifest) are signed, one per
-   48 hashes (`MAX_HASHES_PER_AUTH`) so the `Authorization` header stays under nginx's 8 KB
-   default, and used for the uploads; a server that refuses them gets one per blob.
-7. The release is signed (the last signature) and published to the key's relays (write relays and the
+6. Every signature is asked for together, before any upload, so a person approving on a remote
+   signer sees them in a row: kind 24242 authorizations covering the missing blobs (and the
+   manifest), one per 48 hashes (`MAX_HASHES_PER_AUTH`) so the `Authorization` header stays under
+   nginx's 8 KB default, then the release, with the server hints the checks predict.
+7. The blobs upload in parallel; a server that refuses the authorizations gets one per blob. If a
+   server the release names failed its uploads, the release is signed again without it.
+8. The release is published to the key's relays (write relays and the
    `nostr.json` relays), where consumers read it; at least one must accept. A key with no relays
    of its own is published to the index relays instead, where consumers then look, with a
    warning that names `createNostrRelayList`.
 
 ### Multi-host Kotlin Multiplatform
 
-Each CI host runs `publishToNostr --partial`: steps 1, 2, 4, 5, 6 for its own files, then it
-writes `build/magpie/partials/<host>.json` instead of signing a release. CI collects those files
+Each CI host runs `publishToNostr --partial`: steps 1, 2, 4 and 5, then 6 and 7 without the
+release, for its own files; then it writes `build/magpie/partials/<host>.json` instead of signing a release. CI collects those files
 on one host, which runs `closeNostrRelease`: merge (conflicting hashes fail), check every blob is
 on a server, fetch the `.module` files and run `ModuleChecker` over the merged set (a missing
 host's klibs fail here), upload the manifest, sign once.

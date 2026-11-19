@@ -70,8 +70,8 @@ of reaching it. If it ever fails, check with the publisher before editing it. In
 
 3. **Give CI a signer.** Set `MAGPIE_BUNKER` to the key's NIP-46 `bunker://…` address or 
    `MAGPIE_NSEC` (an `nsec1…`) also works, but it puts the key itself in CI. With a bunker, you
-   approve Magpie's connection once per machine, then each release's signatures: one upload
-   authorization per 48 files and the release itself.
+   approve Magpie's connection once per machine, then each release's signatures, which arrive
+   together before any upload: one upload authorization per 48 files and the release itself.
 
 ### Each release
 

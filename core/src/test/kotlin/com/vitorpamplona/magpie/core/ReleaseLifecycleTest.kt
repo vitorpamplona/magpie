@@ -27,18 +27,28 @@ import com.vitorpamplona.magpie.core.nostr.QuartzNostrIO
 import com.vitorpamplona.magpie.core.publish.BlossomClient
 import com.vitorpamplona.magpie.core.publish.BunkerSigner
 import com.vitorpamplona.magpie.core.publish.MAX_HASHES_PER_AUTH
+import com.vitorpamplona.magpie.core.publish.MagpieSigner
+import com.vitorpamplona.magpie.core.publish.PublishResult
 import com.vitorpamplona.magpie.core.publish.PublishSettings
 import com.vitorpamplona.magpie.core.publish.Publisher
+import com.vitorpamplona.magpie.core.publish.SecretKeySigner
 import com.vitorpamplona.magpie.core.resolve.RouterResponse
 import com.vitorpamplona.magpie.spec.LockFile
+import com.vitorpamplona.magpie.spec.MagpieEvents
 import com.vitorpamplona.magpie.spec.MagpieSpec
 import com.vitorpamplona.magpie.testkit.FakeMavenRepo
+import com.vitorpamplona.magpie.testkit.InMemoryBlossom
 import com.vitorpamplona.magpie.testkit.TestBunker
 import com.vitorpamplona.magpie.testkit.TestIdentity
+import com.vitorpamplona.quartz.nip01Core.core.Event
+import com.vitorpamplona.quartz.nip01Core.core.HexKey
 import com.vitorpamplona.quartz.nip01Core.relay.filters.Filter
+import com.vitorpamplona.quartz.nip01Core.signers.EventTemplate
+import com.vitorpamplona.quartz.nipFCMavenRepositories.release.MavenReleaseEvent
 import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.net.InetSocketAddress
+import java.util.Collections
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -183,6 +193,64 @@ class ReleaseLifecycleTest {
         }
         assertEquals(result.uploaded, world.blossom.uploads.get())
         world.stack(alice).use { assertEquals(200, it.get("com/example/lib-target30/1.0.0/lib-target30-1.0.0.klib").status) }
+    }
+
+    /** Signs as [who], noting each event's kind and how many uploads the server had taken by then. */
+    private class WatchingSigner(
+        who: TestIdentity,
+        private val blossom: InMemoryBlossom,
+    ) : MagpieSigner {
+        private val real = SecretKeySigner(who.nsec)
+        val seen: MutableList<Pair<Int, Int>> = Collections.synchronizedList(mutableListOf())
+        override val signatures: Int get() = real.signatures
+
+        override suspend fun pubKey(): HexKey = real.pubKey()
+
+        override suspend fun sign(template: EventTemplate<*>): Event = real.sign(template).also { seen += it.kind to blossom.uploads.get() }
+    }
+
+    private fun publishWith(
+        signer: MagpieSigner,
+        repo: File,
+        version: String,
+    ): PublishResult {
+        val http = Http.client()
+        val publisher = Publisher(QuartzNostrIO(http, world.log, idleTimeoutMs = 3_000), BlossomClient(http, world.log), signer, http, world.log)
+        return runBlocking {
+            publisher.publish(PublishSettings(repoDir = repo, group = "com.example", version = version, rootArtifact = "lib", indexRelays = listOf(world.relay.url)))
+        }
+    }
+
+    @Test
+    fun everySignatureIsAskedForBeforeTheFirstUpload() {
+        // A person approving on a remote signer gets every request of a release together.
+        world.setUpPublisher(alice)
+        val targets = (1..30).associate { "target$it" to "klib" }
+        val repo = FakeMavenRepo(world.dir("repo")).publish("1.0.0", targets = targets)
+        val signer = WatchingSigner(alice, world.blossom)
+        val result = publishWith(signer, repo.dir, "1.0.0")
+
+        val authorizations = (result.uploaded + MAX_HASHES_PER_AUTH - 1) / MAX_HASHES_PER_AUTH
+        assertEquals(List(authorizations) { MagpieSpec.KIND_BLOSSOM_AUTH } + MagpieSpec.KIND_RELEASE, signer.seen.map { it.first })
+        assertTrue(signer.seen.all { it.second == 0 }, "signed after uploads started: ${signer.seen}")
+        assertEquals(result.uploaded, world.blossom.uploads.get())
+        assertNotNull(result.eventId)
+    }
+
+    @Test
+    fun aServerThatFailsItsUploadsGetsTheReleaseSignedAgainWithoutIt() {
+        // Both servers pass the checks, so the early release names both; blossom2 then refuses
+        // every upload, and the release that goes out must not send clients there.
+        world.setUpPublisher(alice, servers = listOf(world.blossom.url, world.blossom2.url))
+        world.blossom2.refuseAllUploads = true
+        val repo = FakeMavenRepo(world.dir("repo")).publish("1.0.0")
+        val signer = WatchingSigner(alice, world.blossom)
+        val result = publishWith(signer, repo.dir, "1.0.0")
+
+        val releases = signer.seen.filter { it.first == MagpieSpec.KIND_RELEASE }
+        assertEquals(2, releases.size, "signed early with both servers, then again: ${signer.seen}")
+        val published = MagpieEvents.wrap(world.relay.query(Filter(ids = listOf(result.eventId!!))).single()) as MavenReleaseEvent
+        assertEquals(listOf(world.blossom.url), published.servers())
     }
 
     @Test
