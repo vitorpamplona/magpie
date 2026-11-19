@@ -11,7 +11,7 @@ In `settings.gradle.kts`:
 
 ```kotlin
 plugins {
-    id("com.vitorpamplona.magpie") version "0.2.2"
+    id("com.vitorpamplona.magpie") version "0.2.3"
 }
 
 magpie {
@@ -84,7 +84,7 @@ In the library's `build.gradle.kts`:
 
 ```kotlin
 plugins {
-    id("com.vitorpamplona.magpie.publish") version "0.2.2"
+    id("com.vitorpamplona.magpie.publish") version "0.2.3"
 }
 
 group = "com.yourdomain"
