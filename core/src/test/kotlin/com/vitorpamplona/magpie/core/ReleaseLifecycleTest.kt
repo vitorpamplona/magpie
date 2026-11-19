@@ -26,6 +26,7 @@ import com.vitorpamplona.magpie.core.engine.Http
 import com.vitorpamplona.magpie.core.nostr.QuartzNostrIO
 import com.vitorpamplona.magpie.core.publish.BlossomClient
 import com.vitorpamplona.magpie.core.publish.BunkerSigner
+import com.vitorpamplona.magpie.core.publish.MAX_HASHES_PER_AUTH
 import com.vitorpamplona.magpie.core.publish.PublishSettings
 import com.vitorpamplona.magpie.core.publish.Publisher
 import com.vitorpamplona.magpie.core.resolve.RouterResponse
@@ -161,6 +162,27 @@ class ReleaseLifecycleTest {
         assertTrue(result.signatures > 2, "fell back to per-blob auth: ${result.signatures}")
         assertEquals(result.uploaded, world.blossom.uploads.get())
         world.stack(alice).use { assertEquals(200, it.get("com/example/lib/1.0.0/lib-1.0.0.module").status) }
+    }
+
+    @Test
+    fun largeReleasesSplitTheUploadAuthorizationUnderHeaderLimits() {
+        // nostr.download, like most Blossom servers, sits behind nginx: an Authorization header
+        // over 8 KB (about 78 hashes in one authorization) gets 400 Request Header Or Cookie Too Large.
+        world.setUpPublisher(alice)
+        world.blossom.maxAuthHeaderBytes = 8 * 1024
+        val targets = (1..30).associate { "target$it" to "klib" }
+        val repo = FakeMavenRepo(world.dir("repo")).publish("1.0.0", targets = targets)
+        val result = world.publish(alice, repo.dir, "1.0.0")
+
+        assertTrue(result.uploaded > 100, "a release this size used to need one ${result.uploaded}-hash authorization")
+        val authorizations = (result.uploaded + MAX_HASHES_PER_AUTH - 1) / MAX_HASHES_PER_AUTH
+        assertEquals(authorizations + 1, result.signatures, "one authorization per $MAX_HASHES_PER_AUTH hashes, and the release")
+        assertEquals(authorizations, world.blossom.authEvents.size)
+        world.blossom.authEvents.values.forEach { auth ->
+            assertTrue(auth.tags.count { it[0] == "x" } <= MAX_HASHES_PER_AUTH)
+        }
+        assertEquals(result.uploaded, world.blossom.uploads.get())
+        world.stack(alice).use { assertEquals(200, it.get("com/example/lib-target30/1.0.0/lib-target30-1.0.0.klib").status) }
     }
 
     @Test

@@ -188,7 +188,7 @@ public class BlossomClient(
     public companion object {
         /**
          * One BUD-02 upload authorization covering every hash in [hashes] on every server in
-         * [servers]: the first of a release's two signatures.
+         * [servers]. A release signs one per batch of [hashes] before signing the release.
          */
         public fun uploadAuth(
             hashes: Collection<String>,
