@@ -125,7 +125,9 @@ class AuditRegressionTest {
         world.setUpPublisher(alice, listOf(world.blossom.url, world.blossom2.url))
         world.blossom2.refuseAllUploads = true
         val result = world.publish(alice, FakeMavenRepo(world.dir("repo")).publish("1.0.0").dir, "1.0.0")
-        assertTrue(result.signatures <= 3, "signatures: ${result.signatures}")
+        // The authorization, one per-blob probe the server also refuses, the release signed with
+        // both servers before uploading, and the release signed again without blossom2.
+        assertTrue(result.signatures <= 4, "signatures: ${result.signatures}")
         val release = MagpieEvents.wrap(world.relay.query(Filter(ids = listOf(result.eventId!!))).single()) as MavenReleaseEvent
         assertEquals(listOf(world.blossom.url), release.servers(), "only the server that holds everything is a hint")
     }

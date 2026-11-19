@@ -36,7 +36,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.OkHttpClient
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
@@ -59,6 +62,20 @@ class TestBunker(
     /** sign_event requests served. */
     val signRequests = AtomicInteger()
 
+    /** How long the person takes to approve the nth sign_event request (from 1). */
+    @Volatile
+    var approvalDelayMs: (n: Int) -> Long = { 0 }
+
+    /** Approve one request at a time, like a person working through the queue. */
+    @Volatile
+    var oneApprovalAtATime: Boolean = false
+
+    /** Refuse the nth sign_event request (from 1), as a person declining it. */
+    @Volatile
+    var decline: (n: Int) -> Boolean = { false }
+
+    private val approving = Mutex()
+
     val uri: String = "bunker://${transport.pubKey}?relay=${relay.url}&secret=$secret"
 
     private val authorizer =
@@ -80,7 +97,11 @@ class TestBunker(
                 clientPubKey: HexKey,
                 request: BunkerRequest,
             ): Boolean {
-                if (request.method == "sign_event") signRequests.incrementAndGet()
+                if (request.method == "sign_event") {
+                    val n = signRequests.incrementAndGet()
+                    if (oneApprovalAtATime) approving.withLock { delay(approvalDelayMs(n)) } else delay(approvalDelayMs(n))
+                    if (decline(n)) return false
+                }
                 return clientPubKey in paired
             }
         }

@@ -29,19 +29,39 @@ import com.vitorpamplona.quartz.nip01Core.core.Event
 import com.vitorpamplona.quartz.nip01Core.core.HexKey
 import com.vitorpamplona.quartz.nip01Core.core.toHexKey
 import com.vitorpamplona.quartz.nip01Core.crypto.KeyPair
+import com.vitorpamplona.quartz.nip01Core.relay.client.reqs.DynamicSubscription
+import com.vitorpamplona.quartz.nip01Core.relay.filters.Filter
 import com.vitorpamplona.quartz.nip01Core.signers.EventTemplate
 import com.vitorpamplona.quartz.nip01Core.signers.NostrSigner
 import com.vitorpamplona.quartz.nip01Core.signers.NostrSignerInternal
 import com.vitorpamplona.quartz.nip19Bech32.decodePrivateKeyAsHexOrNull
+import com.vitorpamplona.quartz.nip46RemoteSigner.BunkerRequestSign
+import com.vitorpamplona.quartz.nip46RemoteSigner.NostrConnectEvent
 import com.vitorpamplona.quartz.nip46RemoteSigner.signer.NostrSignerRemote
+import com.vitorpamplona.quartz.nip46RemoteSigner.signer.RemoteSignerManager
+import com.vitorpamplona.quartz.nip46RemoteSigner.signer.SignResponse
+import com.vitorpamplona.quartz.nip46RemoteSigner.signer.SignResult
+import com.vitorpamplona.quartz.nip46RemoteSigner.signer.SignerResult
 import com.vitorpamplona.quartz.utils.Hex
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.io.IOException
 import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Signs for a publisher, counting signatures (a release takes two: one Blossom upload
@@ -109,47 +129,135 @@ public class BunkerSigner(
     bunkerUri: String,
     nostr: NostrIO,
     private val log: MagpieLog,
-    // Longer than Quartz's own request window (65 s, a 2 s pause, one retry of 65 s).
+    /**
+     * How long the bunker may go without answering any request. A release sends all its
+     * requests at once and a person approves them in a row, so a request only times out when
+     * no request has been answered for this long, not this long after it was sent.
+     */
     private val timeoutMs: Long = 150_000,
     clientKeyFile: File? = null,
 ) : MagpieSigner {
+    private val transport = NostrSignerInternal(clientKey(clientKeyFile, log))
+    private val onAuthUrl: (String) -> Unit = { url -> log.lifecycle("The bunker asks you to approve this request: $url") }
+
+    /** Connects and reads the key: Quartz's client, with its own request window. */
     private val remote =
         NostrSignerRemote.fromBunkerUri(
             bunkerUri = bunkerUri,
-            signer = NostrSignerInternal(clientKey(clientKeyFile, log)),
+            signer = transport,
             client = nostr.client,
-            onAuthUrl = { url -> log.lifecycle("The bunker asks you to approve this request: $url") },
+            onAuthUrl = onAuthUrl,
         )
 
-    private var connected: HexKey? = null
+    /**
+     * Sends the sign requests. Quartz's [NostrSignerRemote] gives each request 65 s and one retry,
+     * which a queue of approvals can outlast; this manager keeps resending the same request (the
+     * same id, so the bunker doesn't queue it twice) until [sign]'s own window closes.
+     */
+    private val requests =
+        RemoteSignerManager(
+            timeout = ATTEMPT_MS,
+            client = nostr.client,
+            signer = transport,
+            remoteKey = remote.remotePubkey,
+            relayList = remote.relays,
+            maxRetries = Int.MAX_VALUE,
+            onAuthUrl = onAuthUrl,
+        )
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    /** The bunker's answers to [requests]; [remote] listens for its own and drops these. */
+    private val answers =
+        DynamicSubscription(
+            nostr.client,
+            {
+                remote.relays.associateWith {
+                    listOf(Filter(kinds = listOf(NostrConnectEvent.KIND), tags = mapOf("p" to listOf(transport.pubKey))))
+                }
+            },
+        ) { event ->
+            if (event is NostrConnectEvent) {
+                scope.launch {
+                    try {
+                        requests.newResponse(event)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        log.info("Ignoring a bunker message that doesn't decrypt or parse: ${e.message}")
+                    }
+                }
+            }
+        }
+
+    /** When the bunker last answered any request; a request waits while answers keep coming. */
+    private val lastAnswer = AtomicLong(0)
+
+    @Volatile private var connected: HexKey? = null
+    private val connecting = Mutex()
     private val count = AtomicInteger()
 
     override val signatures: Int get() = count.get()
 
     override suspend fun pubKey(): HexKey {
         connected?.let { return it }
-        return withTimeout(timeoutMs) {
-            remote.openSubscription()
-            remote.connect()
-            remote.getPublicKey().also { connected = it }
+        // Signatures may be asked for in parallel; only the first caller connects.
+        return connecting.withLock {
+            connected ?: withTimeout(timeoutMs) {
+                remote.openSubscription()
+                answers.refresh()
+                remote.connect()
+                remote.getPublicKey().also { connected = it }
+            }
         }
     }
 
     override suspend fun sign(template: EventTemplate<*>): Event {
         pubKey()
-        val event =
-            withTimeout(timeoutMs) {
-                remote.sign<Event>(template.createdAt, template.kind, template.tags, template.content)
+        requests.relayList = remote.relays
+        val sent = System.currentTimeMillis()
+        val result =
+            coroutineScope {
+                val request =
+                    async {
+                        requests.launchWaitAndParse(
+                            bunkerRequestBuilder = {
+                                BunkerRequestSign(event = EventTemplate(template.createdAt, template.kind, template.tags, template.content))
+                            },
+                            parser = SignResponse::parse,
+                        )
+                    }
+                var answer: SignerResult.RequestAddressed<SignResult>? = null
+                while (answer == null) {
+                    // Another request's answer moves the deadline: the bunker's user is working
+                    // through the queue.
+                    val quietUntil = maxOf(sent, lastAnswer.get()) + timeoutMs
+                    answer = withTimeoutOrNull((quietUntil - System.currentTimeMillis()).coerceAtLeast(1)) { request.await() }
+                    if (answer == null && System.currentTimeMillis() >= maxOf(sent, lastAnswer.get()) + timeoutMs) {
+                        request.cancel()
+                        throw IllegalStateException(
+                            "The bunker answered no request for ${timeoutMs / 1000} s, so Magpie stopped waiting. Approve every " +
+                                "request it shows, or check that it is online, then publish again.",
+                        )
+                    }
+                }
+                answer
             }
+        lastAnswer.accumulateAndGet(System.currentTimeMillis(), ::maxOf)
+        val event = (result as? SignerResult.RequestAddressed.Successful<SignResult>)?.result?.event ?: throw remote.convertExceptions("Could not sign", result)
         count.incrementAndGet()
         return MagpieEvents.wrap(event) ?: event
     }
 
     override fun close() {
+        answers.close()
+        scope.cancel()
         remote.closeSubscription()
     }
 
     public companion object {
+        /** How long one send of a sign request waits before it is sent again (Quartz's window). */
+        private const val ATTEMPT_MS = 65_000L
+
         /** Where the client key for [bunkerUri]'s bunker lives under Magpie's [cacheDir]. */
         public fun clientKeyFile(
             cacheDir: File,
