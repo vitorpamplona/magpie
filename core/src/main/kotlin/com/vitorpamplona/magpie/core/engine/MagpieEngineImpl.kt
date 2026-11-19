@@ -175,7 +175,7 @@ public class MagpieEngineImpl : MagpieEngine {
         nostr: QuartzNostrIO,
         log: MagpieLog,
     ): MagpieSigner {
-        val bunker = config[EngineConfig.BUNKER_URI]?.takeIf { it.isNotBlank() }
+        val bunker = config[EngineConfig.BUNKER_URI]?.trim()?.takeIf { it.isNotEmpty() }
         val nsec = config[EngineConfig.NSEC]?.takeIf { it.isNotBlank() }
         return when {
             bunker != null -> {

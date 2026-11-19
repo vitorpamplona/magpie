@@ -27,6 +27,7 @@ import com.vitorpamplona.magpie.core.util.MagpieLog
 import com.vitorpamplona.magpie.spec.MagpieEvents
 import com.vitorpamplona.quartz.nip01Core.core.Event
 import com.vitorpamplona.quartz.nip01Core.core.HexKey
+import com.vitorpamplona.quartz.nip01Core.core.hexToByteArray
 import com.vitorpamplona.quartz.nip01Core.core.toHexKey
 import com.vitorpamplona.quartz.nip01Core.crypto.KeyPair
 import com.vitorpamplona.quartz.nip01Core.relay.client.reqs.DynamicSubscription
@@ -35,6 +36,7 @@ import com.vitorpamplona.quartz.nip01Core.signers.EventTemplate
 import com.vitorpamplona.quartz.nip01Core.signers.NostrSigner
 import com.vitorpamplona.quartz.nip01Core.signers.NostrSignerInternal
 import com.vitorpamplona.quartz.nip19Bech32.decodePrivateKeyAsHexOrNull
+import com.vitorpamplona.quartz.nip19Bech32.toNpub
 import com.vitorpamplona.quartz.nip46RemoteSigner.BunkerClientMetadata
 import com.vitorpamplona.quartz.nip46RemoteSigner.BunkerRequestSign
 import com.vitorpamplona.quartz.nip46RemoteSigner.NostrConnectEvent
@@ -139,6 +141,7 @@ public class SecretKeySigner(
  * reused on this machine, or is throwaway without one.
  */
 public class BunkerSigner(
+    /** The `bunker://` URI; surrounding whitespace (a secret pasted with a newline) is ignored. */
     bunkerUri: String,
     nostr: NostrIO,
     private val log: MagpieLog,
@@ -152,16 +155,21 @@ public class BunkerSigner(
     /** The group released: the client key is per group, and the bunker shows it as the app's name. */
     group: String? = null,
 ) : MagpieSigner {
-    private val transport = NostrSignerInternal(derivedClientKey(bunkerUri, group) ?: clientKey(clientKeyFile, log))
+    /** One string for the key and the connection: the secret sent is the one the key comes from. */
+    private val uri = bunkerUri.trim()
+    private val transport = NostrSignerInternal(derivedClientKey(uri, group) ?: clientKey(clientKeyFile, log))
+
+    /** The app name the bunker shows for this client. */
+    private val appName = group?.let { "Magpie: $it" } ?: "Magpie"
     private val onAuthUrl: (String) -> Unit = { url -> log.lifecycle("The bunker asks you to approve this request: $url") }
 
     /** Connects and reads the key: Quartz's client, with its own request window. */
     private val remote =
         NostrSignerRemote.fromBunkerUri(
-            bunkerUri = bunkerUri,
+            bunkerUri = uri,
             signer = transport,
             client = nostr.client,
-            clientMetadata = BunkerClientMetadata(name = group?.let { "Magpie: $it" } ?: "Magpie", url = MAGPIE_URL),
+            clientMetadata = BunkerClientMetadata(name = appName, url = MAGPIE_URL),
             onAuthUrl = onAuthUrl,
         )
 
@@ -221,6 +229,8 @@ public class BunkerSigner(
         // Signatures may be asked for in parallel; only the first caller connects.
         return connecting.withLock {
             connected ?: withTimeout(timeoutMs) {
+                // The name and key the signer shows, so the person approving can tell this is Magpie.
+                log.lifecycle("Magpie: connecting to the bunker as \"$appName\" (${transport.pubKey.hexToByteArray().toNpub()})")
                 remote.openSubscription()
                 answers.refresh()
                 remote.connect()
@@ -298,14 +308,22 @@ public class BunkerSigner(
         ): KeyPair? {
             val bunker = NostrConnectURI.parseBunker(bunkerUri.trim()) ?: return null
             val secret = bunker.secret?.takeIf { it.isNotEmpty() } ?: return null
-            val seed = ByteArrayOutputStream()
+            val buffer = ByteArrayOutputStream()
             for (part in listOf(CLIENT_KEY_DOMAIN, bunker.remoteSignerPubKey.lowercase(), secret, group.orEmpty())) {
                 val bytes = part.encodeToByteArray()
-                seed.write("${bytes.size}:".encodeToByteArray())
-                seed.write(bytes)
+                buffer.write("${bytes.size}:".encodeToByteArray())
+                buffer.write(bytes)
+                bytes.fill(0)
             }
-            var key = sha256(seed.toByteArray())
-            while (!Secp256k1Instance.isPrivateKeyValid(key)) key = sha256(key)
+            // The seed holds the secret: wipe it, and every digest that was not the key, once used.
+            val seed = buffer.toByteArray()
+            var key = sha256(seed)
+            seed.fill(0)
+            while (!Secp256k1Instance.isPrivateKeyValid(key)) {
+                val next = sha256(key)
+                key.fill(0)
+                key = next
+            }
             return KeyPair(key)
         }
 

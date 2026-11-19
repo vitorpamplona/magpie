@@ -64,7 +64,7 @@ class TestBunker(
     /** sign_event requests served. */
     val signRequests = AtomicInteger()
 
-    /** connect requests accepted: one per pairing of a client. */
+    /** connect requests accepted, a paired client reconnecting included. */
     val connects = AtomicInteger()
 
     /** Connections from a client this bunker had not paired with: the ones a signer app asks the user about. */
