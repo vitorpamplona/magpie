@@ -282,6 +282,30 @@ class ReleaseLifecycleTest {
     }
 
     @Test
+    fun aRateLimitedPreflightIsAskedAgainNotTakenAsARefusal() {
+        // nostr.download, the release key's only server, may answer a burst of checks with 429.
+        world.setUpPublisher(alice)
+        world.blossom.busyPreflights.set(5)
+        val repo = FakeMavenRepo(world.dir("repo")).publish("1.0.0")
+        val result = world.publish(alice, repo.dir, "1.0.0")
+        assertNotNull(result.eventId)
+        assertEquals(0, world.blossom.busyPreflights.get(), "the busy answers were used up")
+    }
+
+    @Test
+    fun oneServerGetsAtMostEightRequestsAtOnce() {
+        world.setUpPublisher(alice)
+        world.blossom.answerDelayMs = 50
+        val targets = (1..30).associate { "target$it" to "klib" }
+        val repo = FakeMavenRepo(world.dir("repo")).publish("1.0.0", targets = targets)
+        world.publish(alice, repo.dir, "1.0.0")
+        // At most 8 per server; the server counts a request until its handler returns, a moment
+        // after the client has its answer and sends the next, so allow a little overlap. Without
+        // the cap, the 32 shared check slots all land on this one server.
+        assertTrue(world.blossom.mostAtOnce.get() <= 12, "the server answered ${world.blossom.mostAtOnce.get()} at once")
+    }
+
+    @Test
     fun uploadsDoNotWaitForTheReleaseToBeApproved() {
         // The person approves the upload authorization at once and the release a while later:
         // the blobs upload meanwhile, and the release is published once both are done.
@@ -440,15 +464,16 @@ class ReleaseLifecycleTest {
 
     @Test
     fun aRequestWaitsWhileThePersonIsStillApprovingTheQueue() {
-        // Four requests approved one at a time, 800 ms apart: the last answer comes 3.2 s after
-        // they were sent, past a 2 s window measured from sending, but never 2 s without an answer.
+        // Four requests approved one at a time, 1.2 s apart: the last answer comes 4.8 s after
+        // they were sent, past a 3 s window measured from sending, but never 3 s without an answer.
+        // (The window also bounds the connect, so it leaves room for a loaded machine.)
         world.setUpPublisher(alice)
         val targets = (1..30).associate { "target$it" to "klib" }
         val repo = FakeMavenRepo(world.dir("repo")).publish("1.0.0", targets = targets)
         TestBunker(world.relay, alice).use { bunker ->
             bunker.oneApprovalAtATime = true
-            bunker.approvalDelayMs = { 800 }
-            val result = publishThroughBunker(bunker, repo.dir, timeoutMs = 2_000)
+            bunker.approvalDelayMs = { 1_200 }
+            val result = publishThroughBunker(bunker, repo.dir, timeoutMs = 3_000)
 
             assertTrue(result.signatures >= 4, "signatures: ${result.signatures}")
             assertNotNull(result.eventId)

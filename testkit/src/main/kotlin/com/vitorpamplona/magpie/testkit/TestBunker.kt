@@ -38,8 +38,10 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeout
 import okhttp3.OkHttpClient
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
@@ -61,6 +63,13 @@ class TestBunker(
 
     /** sign_event requests served. */
     val signRequests = AtomicInteger()
+
+    /** connect requests accepted: one per pairing of a client. */
+    val connects = AtomicInteger()
+
+    /** Runs as a client's connect is accepted. */
+    @Volatile
+    var onConnect: () -> Unit = {}
 
     /** How long the person takes to approve the nth sign_event request (from 1). */
     @Volatile
@@ -87,6 +96,8 @@ class TestBunker(
                 request: BunkerRequestConnect,
             ): Nip46ConnectDecision =
                 if (request.secret == secret) {
+                    connects.incrementAndGet()
+                    onConnect()
                     paired += clientPubKey
                     Nip46ConnectDecision.Accept(secret)
                 } else {
@@ -116,6 +127,14 @@ class TestBunker(
 
     init {
         scope.launch { service.run() }
+        // NIP-46 requests are ephemeral: one a client sends before the bunker's REQ is in is
+        // never delivered, and the client waits a whole request window to send it again.
+        runBlocking {
+            withTimeout(10_000) {
+                while (synchronized(relay.received) { relay.received.none { it.startsWith("[\"REQ\"") && transport.pubKey in it } }) delay(10)
+                delay(50)
+            }
+        }
     }
 
     override fun close() {

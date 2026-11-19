@@ -68,7 +68,11 @@ import java.util.concurrent.atomic.AtomicLong
  * authorization and the release event).
  */
 public interface MagpieSigner : AutoCloseable {
+    /** The signing key; a remote signer connects (and asks its user to approve) to answer. */
     public suspend fun pubKey(): HexKey
+
+    /** The signing key when it is known without reaching the signer, else null. */
+    public suspend fun pubKeyIfKnown(): HexKey? = null
 
     public suspend fun sign(template: EventTemplate<*>): Event
 
@@ -111,6 +115,8 @@ public class SecretKeySigner(
         }
 
     override suspend fun pubKey(): HexKey = delegate.pubKey()
+
+    override suspend fun pubKeyIfKnown(): HexKey = delegate.pubKey()
 
     override suspend fun sign(template: EventTemplate<*>): Event = delegate.sign(template)
 
@@ -197,6 +203,8 @@ public class BunkerSigner(
     private val count = AtomicInteger()
 
     override val signatures: Int get() = count.get()
+
+    override suspend fun pubKeyIfKnown(): HexKey? = connected
 
     override suspend fun pubKey(): HexKey {
         connected?.let { return it }
