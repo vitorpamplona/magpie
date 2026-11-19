@@ -35,6 +35,8 @@ import com.vitorpamplona.quartz.nip01Core.signers.NostrSignerInternal
 import com.vitorpamplona.quartz.nip19Bech32.decodePrivateKeyAsHexOrNull
 import com.vitorpamplona.quartz.nip46RemoteSigner.signer.NostrSignerRemote
 import com.vitorpamplona.quartz.utils.Hex
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import java.io.File
 import java.io.IOException
@@ -121,17 +123,21 @@ public class BunkerSigner(
             onAuthUrl = { url -> log.lifecycle("The bunker asks you to approve this request: $url") },
         )
 
-    private var connected: HexKey? = null
+    @Volatile private var connected: HexKey? = null
+    private val connecting = Mutex()
     private val count = AtomicInteger()
 
     override val signatures: Int get() = count.get()
 
     override suspend fun pubKey(): HexKey {
         connected?.let { return it }
-        return withTimeout(timeoutMs) {
-            remote.openSubscription()
-            remote.connect()
-            remote.getPublicKey().also { connected = it }
+        // Signatures may be asked for in parallel; only the first caller connects.
+        return connecting.withLock {
+            connected ?: withTimeout(timeoutMs) {
+                remote.openSubscription()
+                remote.connect()
+                remote.getPublicKey().also { connected = it }
+            }
         }
     }
 

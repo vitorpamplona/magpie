@@ -45,10 +45,12 @@ import com.vitorpamplona.quartz.nip01Core.core.HexKey
 import com.vitorpamplona.quartz.nip01Core.relay.filters.Filter
 import com.vitorpamplona.quartz.nip01Core.signers.EventTemplate
 import com.vitorpamplona.quartz.nipFCMavenRepositories.release.MavenReleaseEvent
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.net.InetSocketAddress
 import java.util.Collections
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -231,10 +233,49 @@ class ReleaseLifecycleTest {
         val result = publishWith(signer, repo.dir, "1.0.0")
 
         val authorizations = (result.uploaded + MAX_HASHES_PER_AUTH - 1) / MAX_HASHES_PER_AUTH
-        assertEquals(List(authorizations) { MagpieSpec.KIND_BLOSSOM_AUTH } + MagpieSpec.KIND_RELEASE, signer.seen.map { it.first })
+        // In any order: the requests go out together.
+        assertEquals(
+            (List(authorizations) { MagpieSpec.KIND_BLOSSOM_AUTH } + MagpieSpec.KIND_RELEASE).sorted(),
+            signer.seen.map { it.first }.sorted(),
+        )
         assertTrue(signer.seen.all { it.second == 0 }, "signed after uploads started: ${signer.seen}")
         assertEquals(result.uploaded, world.blossom.uploads.get())
         assertNotNull(result.eventId)
+    }
+
+    /** Holds each request for a moment and records how many were waiting on it at once. */
+    private class QueueingSigner(
+        who: TestIdentity,
+    ) : MagpieSigner {
+        private val real = SecretKeySigner(who.nsec)
+        private val inFlight = AtomicInteger()
+        val mostAtOnce = AtomicInteger()
+        override val signatures: Int get() = real.signatures
+
+        override suspend fun pubKey(): HexKey = real.pubKey()
+
+        override suspend fun sign(template: EventTemplate<*>): Event {
+            mostAtOnce.accumulateAndGet(inFlight.incrementAndGet(), ::maxOf)
+            try {
+                delay(300)
+                return real.sign(template)
+            } finally {
+                inFlight.decrementAndGet()
+            }
+        }
+    }
+
+    @Test
+    fun aReleaseSendsEverySignatureRequestAtOnce() {
+        // A remote signer queues them, so its user approves them in a row.
+        world.setUpPublisher(alice)
+        val targets = (1..30).associate { "target$it" to "klib" }
+        val repo = FakeMavenRepo(world.dir("repo")).publish("1.0.0", targets = targets)
+        val signer = QueueingSigner(alice)
+        val result = publishWith(signer, repo.dir, "1.0.0")
+
+        assertTrue(result.signatures > 2, "a release this size takes several authorizations: ${result.signatures}")
+        assertEquals(result.signatures, signer.mostAtOnce.get(), "every request was waiting on the signer at once")
     }
 
     @Test

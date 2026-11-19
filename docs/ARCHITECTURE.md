@@ -105,8 +105,9 @@ runs in a worker process:
 5. Every server is asked `HEAD /<sha256>` for every blob; missing ones get a BUD-06
    `HEAD /upload` preflight. A blob no server would take fails the publish, **before anything is
    signed**.
-6. Every signature is asked for together, before any upload, so a person approving on a remote
-   signer sees them in a row: kind 24242 authorizations covering the missing blobs (and the
+6. Every signature is requested at once, in parallel, before any upload; a remote signer queues
+   them, so a person approving sees them in a row, and the NIP-46 client matches each answer to
+   its request by id. They are kind 24242 authorizations covering the missing blobs (and the
    manifest), one per 48 hashes (`MAX_HASHES_PER_AUTH`) so the `Authorization` header stays under
    nginx's 8 KB default, then the release, with the server hints the checks predict.
 7. The blobs upload in parallel; a server that refuses the authorizations gets one per blob. If a

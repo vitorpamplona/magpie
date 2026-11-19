@@ -143,30 +143,26 @@ public class Publisher(
 
     private fun now() = clock.nowMillis() / 1000
 
-    /** One signature at a time: remote signers answer in order, and a human may be approving. */
-    private val signing = Mutex()
-
     /**
      * Signs [template] and checks what came back: the expected key, exactly the template asked
      * for, and a valid signature. A misbehaving bunker can't slip in another key or other tags.
      */
-    private suspend fun signChecked(template: EventTemplate<*>): Event =
-        signing.withLock {
-            val expected = signer.pubKey()
-            val event = signer.sign(template)
-            val problem =
-                when {
-                    event.pubKey != expected -> "it is signed by ${PublicKeys.npub(event.pubKey)}, not ${PublicKeys.npub(expected)}"
-                    event.kind != template.kind -> "kind ${event.kind} instead of ${template.kind}"
-                    event.createdAt != template.createdAt -> "created_at changed"
-                    event.content != template.content -> "content changed"
-                    !event.tags.contentDeepEquals(template.tags) -> "tags changed"
-                    !EventVerification.isValid(event) -> "its id or signature is invalid"
-                    else -> null
-                }
-            if (problem != null) throw IllegalStateException("The signer returned an event that doesn't match the request ($problem). Nothing was published.")
-            event
-        }
+    private suspend fun signChecked(template: EventTemplate<*>): Event {
+        val expected = signer.pubKey()
+        val event = signer.sign(template)
+        val problem =
+            when {
+                event.pubKey != expected -> "it is signed by ${PublicKeys.npub(event.pubKey)}, not ${PublicKeys.npub(expected)}"
+                event.kind != template.kind -> "kind ${event.kind} instead of ${template.kind}"
+                event.createdAt != template.createdAt -> "created_at changed"
+                event.content != template.content -> "content changed"
+                !event.tags.contentDeepEquals(template.tags) -> "tags changed"
+                !EventVerification.isValid(event) -> "its id or signature is invalid"
+                else -> null
+            }
+        if (problem != null) throw IllegalStateException("The signer returned an event that doesn't match the request ($problem). Nothing was published.")
+        return event
+    }
 
     /**
      * Reads the signer's relay list (kind 10002) and server list (kind 10063) the way consumers
@@ -377,9 +373,9 @@ public class Publisher(
                 MagpieEvents.release(manifest, manifestBlob.sha256, manifestBlob.size, servers = hints, createdAt = now())
             }
 
-        // The release is signed right after the upload authorizations, before any upload, with the
-        // hints the checks predict, so a person approving on a remote signer sees every request
-        // together. It is only published once every blob is up.
+        // The release is signed with the upload authorizations, before any upload, with the hints
+        // the checks predict, so a person approving on a remote signer sees every request together.
+        // It is only published once every blob is up.
         var early: Pair<List<String>, Event>? = null
         val hosted =
             host(files + manifestBlob, context.servers, dryRun, known) { predicted ->
@@ -480,7 +476,7 @@ public class Publisher(
         dryRun: Boolean,
         known: Map<String, Set<String>> = emptyMap(),
         /**
-         * Runs once the upload authorizations are signed and before any upload, with the servers
+         * Runs while the upload authorizations are being signed and before any upload, with the servers
          * expected to hold each blob afterwards (those that have it, and those whose checks said
          * they would take it). Not called when nothing needs uploading.
          */
@@ -532,14 +528,23 @@ public class Publisher(
         // One authorization per batch of hashes, so its header stays under common size limits.
         val sharedBy = HashMap<String, Event>()
         val batchSize = HashMap<String, Int>()
-        toUpload.chunked(hashesPerAuth).forEach { batch ->
-            val auth = signChecked(BlossomClient.uploadAuth(batch.map { it.sha256 }, lacking.keys, now()))
-            batch.forEach {
-                sharedBy[it.sha256] = auth
-                batchSize[it.sha256] = batch.size
-            }
+        val predicted = unique.associate { it.sha256 to (present.getValue(it.sha256) + willTake[it.sha256].orEmpty()) }
+        // Every request goes out at once: a remote signer queues them, so its user approves them
+        // in a row, and Quartz's NIP-46 client matches each answer to its request by id.
+        coroutineScope {
+            val release = beforeUpload?.let { sign -> async { sign(predicted) } }
+            toUpload
+                .chunked(hashesPerAuth)
+                .map { batch -> async { batch to signChecked(BlossomClient.uploadAuth(batch.map { it.sha256 }, lacking.keys, now())) } }
+                .awaitAll()
+                .forEach { (batch, auth) ->
+                    batch.forEach {
+                        sharedBy[it.sha256] = auth
+                        batchSize[it.sha256] = batch.size
+                    }
+                }
+            release?.await()
         }
-        beforeUpload?.invoke(unique.associate { it.sha256 to (present.getValue(it.sha256) + willTake[it.sha256].orEmpty()) })
         val sharedRefused = ConcurrentHashMap.newKeySet<String>()
         val givenUp = ConcurrentHashMap.newKeySet<String>()
         val perBlobWorks = ConcurrentHashMap.newKeySet<String>()
