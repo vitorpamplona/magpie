@@ -67,6 +67,12 @@ class TestBunker(
     /** connect requests accepted: one per pairing of a client. */
     val connects = AtomicInteger()
 
+    /** Connections from a client this bunker had not paired with: the ones a signer app asks the user about. */
+    val newClients = AtomicInteger()
+
+    /** The app name each client gave when it connected, by client key. */
+    val clientNames = ConcurrentHashMap<HexKey, String>()
+
     /** Runs as a client's connect is accepted. */
     @Volatile
     var onConnect: () -> Unit = {}
@@ -98,7 +104,8 @@ class TestBunker(
                 if (request.secret == secret) {
                     connects.incrementAndGet()
                     onConnect()
-                    paired += clientPubKey
+                    if (paired.add(clientPubKey)) newClients.incrementAndGet()
+                    request.clientMetadata?.name?.let { clientNames[clientPubKey] = it }
                     Nip46ConnectDecision.Accept(secret)
                 } else {
                     Nip46ConnectDecision.Reject("wrong secret")

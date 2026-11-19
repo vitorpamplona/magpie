@@ -350,6 +350,29 @@ class ReleaseKeyTest {
     }
 
     @Test
+    fun everyRunOfAGroupIsTheClientTheBunkerAlreadyPaired() {
+        MagpieWorld().use { world ->
+            TestBunker(world.relay, alice).use { bunker ->
+                // Each run is a fresh process on a fresh CI runner: nothing carries over but the URI.
+                fun run(group: String) {
+                    val nostr = QuartzNostrIO(Http.client(), world.log, 3_000)
+                    BunkerSigner(bunker.uri, nostr, world.log, timeoutMs = 20_000, group = group).use { signer ->
+                        val event = runBlocking { signer.sign(EventTemplate<Event>(1L, 1, emptyArray(), group)) }
+                        assertEquals(alice.pubKey, event.pubKey)
+                    }
+                    nostr.close()
+                }
+                run("com.example")
+                run("com.example")
+                assertEquals(1, bunker.newClients.get(), "the second release reconnects as the app the user already approved")
+                run("com.other")
+                assertEquals(2, bunker.newClients.get(), "another group is its own app")
+                assertEquals(setOf("Magpie: com.example", "Magpie: com.other"), bunker.clientNames.values.toSet())
+            }
+        }
+    }
+
+    @Test
     fun publishingRefusesAKeyTheDomainDoesNotVouchFor() {
         MagpieWorld().use { world ->
             world.setUpPublisher(mallory)

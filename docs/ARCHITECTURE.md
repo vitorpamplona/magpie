@@ -136,8 +136,14 @@ host's klibs fail here), upload the manifest, sign once.
 ### Signers
 
 `MAGPIE_BUNKER` (a NIP-46 `bunker://` URI; the key never touches CI) wins over `MAGPIE_NSEC`.
-The NIP-46 client key is kept in Magpie's cache (`bunker-clients/<bunker pubkey>.key`, owner-only),
-so every task and build on a machine is the client the bunker already paired with.
+The NIP-46 client key is derived from the bunker URI's secret and the group being released
+(`BunkerSigner.derivedClientKey`: SHA-256 over `magpie/nip46-client-key/v1`, the bunker's key, the
+secret and the group, each length-prefixed, hashed again until it is a valid secp256k1 key). So every
+task, build and CI runner releasing a group is the client the bunker already paired with: a signer
+asks about each group once, and shows it as `Magpie: <group>`, the name Magpie sends with `connect`.
+Relays are left out, so a bunker that moves relays keeps its clients. A URI without a secret has
+nothing private to derive from; its key is kept in Magpie's cache
+(`bunker-clients/<bunker pubkey>.key`, owner-only), so a machine still reuses it.
 A sign request waits as long as the bunker keeps answering: it times out only after 150 s with
 no answer to any request, so a person can work through a release's queue at their own pace.
 Magpie sends sign requests through its own `RemoteSignerManager` and subscription, resending
