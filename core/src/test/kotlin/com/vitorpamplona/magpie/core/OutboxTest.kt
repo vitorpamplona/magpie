@@ -147,6 +147,22 @@ class OutboxTest {
     }
 
     @Test
+    fun anEmptyRelayUpdateRevokesMemoryAndDiskHintsAcrossRestart() {
+        val dir = world.dir("revoked-hints")
+        val hints = RelayHints(dir)
+        hints.put(alice.pubKey, listOf(outbox.url))
+        val persisted = File(dir, "${alice.pubKey}.txt")
+        assertTrue(persisted.readText().isNotBlank())
+
+        hints.put(alice.pubKey, emptyList())
+
+        assertEquals(emptyList(), hints[alice.pubKey])
+        assertTrue(persisted.isFile)
+        assertEquals("", persisted.readText())
+        assertEquals(emptyList(), RelayHints(dir)[alice.pubKey])
+    }
+
+    @Test
     fun createRelayListPublishesToTheIndexRelays() {
         val (publisher, _) = world.publisher(alice)
         runBlocking { publisher.createRelayList(listOf(outbox.url), ListSettings(null, listOf(world.relay.url))) }
