@@ -180,7 +180,13 @@ public class MagpieEngineImpl : MagpieEngine {
         return when {
             bunker != null -> {
                 val cacheDir = config[EngineConfig.CACHE_DIR]?.takeIf { it.isNotBlank() }?.let(::File)
-                BunkerSigner(bunker, nostr, log, clientKeyFile = cacheDir?.let { BunkerSigner.clientKeyFile(it, bunker) })
+                BunkerSigner(
+                    bunker,
+                    nostr,
+                    log,
+                    clientKeyFile = cacheDir?.let { BunkerSigner.clientKeyFile(it, bunker) },
+                    group = config[EngineConfig.GROUP]?.takeIf { it.isNotBlank() },
+                )
             }
             nsec != null -> SecretKeySigner(nsec)
             else -> throw IllegalStateException(

@@ -22,12 +22,18 @@ package com.vitorpamplona.magpie.core
 
 import com.vitorpamplona.magpie.core.publish.BunkerSigner
 import com.vitorpamplona.magpie.core.util.MagpieLog
+import com.vitorpamplona.quartz.nip01Core.core.toHexKey
+import com.vitorpamplona.quartz.nip19Bech32.decodePrivateKeyAsHexOrNull
+import com.vitorpamplona.quartz.nip19Bech32.toNsec
+import com.vitorpamplona.quartz.utils.Secp256k1Instance
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermission
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class BunkerClientKeyTest {
@@ -80,5 +86,44 @@ class BunkerClientKeyTest {
         // A second task that found no file when it looked still ends on the key the file holds.
         assertEquals(theirs.pubKey.toList(), BunkerSigner.clientKey(file, log).pubKey.toList())
         assertEquals(listOf(file.name), file.parentFile.list()!!.toList())
+    }
+
+    @Test
+    fun aBunkerWithASecretGivesEveryRunTheSameClientPerGroup() {
+        val uri = "bunker://$remote?relay=wss://relay.example&secret=s3cret"
+        val key = assertNotNull(BunkerSigner.derivedClientKey(uri, "com.example.lib"))
+        // A CI runner starts with nothing: the same URI and group must give the same client.
+        assertEquals(key.pubKey.toList(), BunkerSigner.derivedClientKey(uri, "com.example.lib")!!.pubKey.toList())
+        // Relays, their order and surrounding whitespace don't make a new client.
+        val moved = " bunker://$remote?secret=s3cret&relay=wss://other.example&relay=wss://relay.example\n"
+        assertEquals(key.pubKey.toList(), BunkerSigner.derivedClientKey(moved, "com.example.lib")!!.pubKey.toList())
+        // Each group is its own app on the bunker, and a new secret is a new client.
+        assertNotEquals(key.pubKey.toList(), BunkerSigner.derivedClientKey(uri, "com.example.other")!!.pubKey.toList())
+        assertNotEquals(key.pubKey.toList(), BunkerSigner.derivedClientKey(uri, null)!!.pubKey.toList())
+        assertNotEquals(
+            key.pubKey.toList(),
+            BunkerSigner.derivedClientKey(uri.replace("s3cret", "other"), "com.example.lib")!!.pubKey.toList(),
+        )
+    }
+
+    @Test
+    fun theDerivedKeyIsAValidNsec() {
+        for (i in 0 until 200) {
+            val key = BunkerSigner.derivedClientKey("bunker://$remote?relay=wss://relay.example&secret=s$i", "g$i")!!
+            val priv = key.privKey!!
+            assertTrue(Secp256k1Instance.isPrivateKeyValid(priv))
+            val nsec = priv.toNsec()
+            assertTrue(nsec.startsWith("nsec1"))
+            assertEquals(priv.toHexKey(), decodePrivateKeyAsHexOrNull(nsec))
+        }
+    }
+
+    @Test
+    fun nothingPrivateToDeriveFromMeansNoDerivedKey() {
+        // The bunker's key and relays are public: a key made from them alone would be anyone's.
+        assertNull(BunkerSigner.derivedClientKey("bunker://$remote?relay=wss://relay.example", "g"))
+        assertNull(BunkerSigner.derivedClientKey("bunker://$remote?relay=wss://relay.example&secret=", "g"))
+        assertNull(BunkerSigner.derivedClientKey("bunker://alice@example.com", "g"))
+        assertNull(BunkerSigner.derivedClientKey("nostrconnect://$remote?secret=s", "g"))
     }
 }

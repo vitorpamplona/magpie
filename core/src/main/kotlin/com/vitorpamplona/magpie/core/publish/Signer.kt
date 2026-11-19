@@ -35,14 +35,17 @@ import com.vitorpamplona.quartz.nip01Core.signers.EventTemplate
 import com.vitorpamplona.quartz.nip01Core.signers.NostrSigner
 import com.vitorpamplona.quartz.nip01Core.signers.NostrSignerInternal
 import com.vitorpamplona.quartz.nip19Bech32.decodePrivateKeyAsHexOrNull
+import com.vitorpamplona.quartz.nip46RemoteSigner.BunkerClientMetadata
 import com.vitorpamplona.quartz.nip46RemoteSigner.BunkerRequestSign
 import com.vitorpamplona.quartz.nip46RemoteSigner.NostrConnectEvent
+import com.vitorpamplona.quartz.nip46RemoteSigner.NostrConnectURI
 import com.vitorpamplona.quartz.nip46RemoteSigner.signer.NostrSignerRemote
 import com.vitorpamplona.quartz.nip46RemoteSigner.signer.RemoteSignerManager
 import com.vitorpamplona.quartz.nip46RemoteSigner.signer.SignResponse
 import com.vitorpamplona.quartz.nip46RemoteSigner.signer.SignResult
 import com.vitorpamplona.quartz.nip46RemoteSigner.signer.SignerResult
 import com.vitorpamplona.quartz.utils.Hex
+import com.vitorpamplona.quartz.utils.Secp256k1Instance
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -55,6 +58,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
 import java.nio.file.FileAlreadyExistsException
@@ -125,11 +129,14 @@ public class SecretKeySigner(
 
 /**
  * Signs through a NIP-46 bunker (`bunker://<remote>?relay=…&secret=…`): the key never leaves the
- * bunker, which is what CI should use. A local client key encrypts the conversation. With
- * [clientKeyFile] it is kept there and reused, so every task of a build (each in its own worker,
- * one per published project) and every later build on the machine is the client the bunker
- * already paired with: one connection approval, not one per task. Without it the key is
- * throwaway.
+ * bunker, which is what CI should use. A local client key encrypts the conversation, and the
+ * bunker knows the client by it: a client it already paired with reconnects without asking.
+ *
+ * When the URI carries a secret, the client key is [derivedClientKey] from it and [group], so
+ * every task of a build, every later build and every CI runner (which starts with nothing) is the
+ * same client for that group: one connection approval per group, ever, not one per release. A URI
+ * without a secret has nothing private to derive from: the key is kept in [clientKeyFile] and
+ * reused on this machine, or is throwaway without one.
  */
 public class BunkerSigner(
     bunkerUri: String,
@@ -142,8 +149,10 @@ public class BunkerSigner(
      */
     private val timeoutMs: Long = 150_000,
     clientKeyFile: File? = null,
+    /** The group released: the client key is per group, and the bunker shows it as the app's name. */
+    group: String? = null,
 ) : MagpieSigner {
-    private val transport = NostrSignerInternal(clientKey(clientKeyFile, log))
+    private val transport = NostrSignerInternal(derivedClientKey(bunkerUri, group) ?: clientKey(clientKeyFile, log))
     private val onAuthUrl: (String) -> Unit = { url -> log.lifecycle("The bunker asks you to approve this request: $url") }
 
     /** Connects and reads the key: Quartz's client, with its own request window. */
@@ -152,6 +161,7 @@ public class BunkerSigner(
             bunkerUri = bunkerUri,
             signer = transport,
             client = nostr.client,
+            clientMetadata = BunkerClientMetadata(name = group?.let { "Magpie: $it" } ?: "Magpie", url = MAGPIE_URL),
             onAuthUrl = onAuthUrl,
         )
 
@@ -265,6 +275,39 @@ public class BunkerSigner(
     public companion object {
         /** How long one send of a sign request waits before it is sent again (Quartz's window). */
         private const val ATTEMPT_MS = 65_000L
+
+        private const val MAGPIE_URL = "https://github.com/vitorpamplona/magpie"
+
+        /** Separates these bytes from any other use of the same secret: they are Magpie's NIP-46 client key. */
+        private const val CLIENT_KEY_DOMAIN = "magpie/nip46-client-key/v1"
+
+        /**
+         * The client key for [bunkerUri]'s bunker and [group], or null when the URI has no secret
+         * (or is not a `bunker://<hex pubkey>` URI). SHA-256 over the domain, the bunker's key, the
+         * secret and the group, each length-prefixed; a digest that is not a valid secp256k1 secret
+         * key (zero, or not below the curve order, about one in 2^128) is hashed again until it is,
+         * so the result is always a usable nsec. The relays in the URI are not part of it: a
+         * bunker that moves relays is still the same client.
+         *
+         * Anyone holding the URI can derive this key and be this client, as anyone holding it
+         * could already pair a new one: keep the URI secret.
+         */
+        public fun derivedClientKey(
+            bunkerUri: String,
+            group: String?,
+        ): KeyPair? {
+            val bunker = NostrConnectURI.parseBunker(bunkerUri.trim()) ?: return null
+            val secret = bunker.secret?.takeIf { it.isNotEmpty() } ?: return null
+            val seed = ByteArrayOutputStream()
+            for (part in listOf(CLIENT_KEY_DOMAIN, bunker.remoteSignerPubKey.lowercase(), secret, group.orEmpty())) {
+                val bytes = part.encodeToByteArray()
+                seed.write("${bytes.size}:".encodeToByteArray())
+                seed.write(bytes)
+            }
+            var key = sha256(seed.toByteArray())
+            while (!Secp256k1Instance.isPrivateKeyValid(key)) key = sha256(key)
+            return KeyPair(key)
+        }
 
         /** Where the client key for [bunkerUri]'s bunker lives under Magpie's [cacheDir]. */
         public fun clientKeyFile(
