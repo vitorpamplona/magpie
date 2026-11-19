@@ -27,8 +27,15 @@ import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.IElectrumXClient
 import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.NamecoinCoreRpcClient
 import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.NamecoinCoreRpcConfig
 import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.NamecoinNameResolver
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.Interceptor
 import okhttp3.OkHttpClient
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
 import java.net.URI
 
 /** The single resolver factory used by dependency resolution and publication checks. */
@@ -73,8 +80,9 @@ public object Nip05ResolverFactory {
                     val passwordEnv =
                         config[EngineConfig.NAMECOIN_CORE_RPC_PASSWORD_ENV]?.takeIf { it.isNotBlank() }
                             ?: EngineConfig.DEFAULT_NAMECOIN_CORE_RPC_PASSWORD_ENV
+                    val coreHttp = http.newBuilder().addInterceptor(CoreRpcEnvelopeGuard).build()
                     val core =
-                        NamecoinCoreRpcClient { http }.apply {
+                        NamecoinCoreRpcClient { coreHttp }.apply {
                             setConfig(
                                 NamecoinCoreRpcConfig(
                                     url = url,
@@ -94,6 +102,33 @@ public object Nip05ResolverFactory {
 
         val resolver = NamecoinNameResolver(BoundedNamecoinClient(client), lookupTimeoutMs = timeout) { servers }
         return DispatchingNip05Resolver(https, NamecoinNip05Resolver(resolver))
+    }
+}
+
+/**
+ * Validates only the JSON-RPC success envelope, not the Namecoin record inside its string value.
+ * Quartz 2.19.0 otherwise classifies several malformed envelopes as transport failures, which
+ * could invoke ElectrumX fallback and eventually make a parent candidate look authoritative.
+ */
+internal object CoreRpcEnvelopeGuard : Interceptor {
+    private val json = Json { isLenient = true }
+
+    override fun intercept(chain: Interceptor.Chain): Response {
+        val response = chain.proceed(chain.request())
+        if (!response.isSuccessful) return response
+        val contentType = response.body.contentType()
+        val bytes = response.body.bytes()
+        val valid =
+            runCatching {
+                val envelope = json.parseToJsonElement(bytes.decodeToString()) as? JsonObject ?: return@runCatching false
+                val error = envelope["error"]
+                if (error != null && error !is JsonNull) return@runCatching true
+                val result = envelope["result"] as? JsonObject ?: return@runCatching false
+                val value = result["value"] as? JsonPrimitive
+                value?.isString == true
+            }.getOrDefault(false)
+        if (!valid) throw MalformedCoreRpcResponseException()
+        return response.newBuilder().body(bytes.toResponseBody(contentType)).build()
     }
 }
 

@@ -68,6 +68,10 @@ rejected before the URL can enter Gradle configuration-cache inputs. Validation 
 include the configured URL. Plain HTTP is accepted only for literal loopback hosts such as
 `localhost`, `127.0.0.1`, and `::1`. Remote Core RPC endpoints must use HTTPS.
 
+Successful HTTP responses must have a valid `name_show` result envelope with a string `value`, or
+a JSON-RPC error. Malformed success envelopes fail closed and do not invoke optional ElectrumX
+fallback. Genuine transport failures retain that fallback when it is explicitly enabled.
+
 The names can be changed without changing where the values come from:
 
 ```kotlin

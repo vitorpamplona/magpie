@@ -26,15 +26,23 @@ import com.vitorpamplona.magpie.core.engine.Http
 import com.vitorpamplona.magpie.core.engine.ResolverStack
 import com.vitorpamplona.magpie.core.publish.ReleaseKeyCheck
 import com.vitorpamplona.magpie.core.publish.ReleaseKeyMismatchException
+import com.vitorpamplona.magpie.core.resolve.CoreRpcEnvelopeGuard
+import com.vitorpamplona.magpie.core.resolve.CoreRpcNamecoinClient
 import com.vitorpamplona.magpie.core.resolve.GroupRule
 import com.vitorpamplona.magpie.core.resolve.LockStore
 import com.vitorpamplona.magpie.core.resolve.MagpieSecurityException
+import com.vitorpamplona.magpie.core.resolve.MalformedCoreRpcResponseException
 import com.vitorpamplona.magpie.core.resolve.Nip05Answer
 import com.vitorpamplona.magpie.core.resolve.Nip05Resolver
 import com.vitorpamplona.magpie.core.resolve.Nip05ResolverFactory
 import com.vitorpamplona.magpie.core.resolve.TrustPolicy
 import com.vitorpamplona.magpie.core.resolve.parseElectrumxServers
 import com.vitorpamplona.magpie.testkit.TestIdentity
+import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.ElectrumxServer
+import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.IElectrumXClient
+import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.NameShowResult
+import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.NamecoinCoreRpcClient
+import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.NamecoinCoreRpcConfig
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.Credentials
@@ -259,6 +267,49 @@ class NamecoinFactoryTest {
         } finally {
             http.dispatcher.executorService.shutdown()
             http.connectionPool.evictAll()
+        }
+    }
+
+    @Test
+    fun malformedCoreProtocolFailuresSkipFallbackButTransportFailuresUseIt() {
+        var fallbackCalls = 0
+        val fallback =
+            object : IElectrumXClient {
+                override suspend fun nameShowWithFallback(
+                    identifier: String,
+                    servers: List<ElectrumxServer>,
+                ): NameShowResult {
+                    fallbackCalls++
+                    return NameShowResult(identifier, "{}")
+                }
+            }
+        val (server, url) =
+            rpcServer { request ->
+                if ("d/malformed" in request) {
+                    200 to """{"result":null,"error":null}"""
+                } else {
+                    500 to ""
+                }
+            }
+        val http = Http.client()
+        try {
+            val guardedHttp = http.newBuilder().addInterceptor(CoreRpcEnvelopeGuard).build()
+            val core =
+                NamecoinCoreRpcClient { guardedHttp }.apply {
+                    setConfig(NamecoinCoreRpcConfig(url = url, username = "test", password = "test", timeoutMs = 2000))
+                }
+            val client = CoreRpcNamecoinClient(core, fallback)
+            assertFailsWith<MalformedCoreRpcResponseException> {
+                runBlocking { client.nameShowWithFallback("d/malformed", emptyList()) }
+            }
+            assertEquals(0, fallbackCalls)
+
+            assertEquals("{}", runBlocking { client.nameShowWithFallback("d/transport", emptyList()) }?.value)
+            assertEquals(1, fallbackCalls)
+        } finally {
+            http.dispatcher.executorService.shutdown()
+            http.connectionPool.evictAll()
+            server.stop(0)
         }
     }
 

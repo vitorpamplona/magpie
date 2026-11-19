@@ -28,6 +28,7 @@ import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.NamecoinNameBackend
 import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.NamecoinNameResolver
 import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.NamecoinResolveOutcome
 import kotlinx.coroutines.CancellationException
+import java.io.IOException
 import java.net.URI
 
 /**
@@ -142,11 +143,18 @@ internal class CoreRpcNamecoinClient(
             return core.nameShow(identifier)
                 ?: throw IllegalStateException("Namecoin Core RPC returned a malformed successful name_show result")
         } catch (e: NamecoinLookupException.ServersUnreachable) {
+            generateSequence<Throwable>(e) { it.cause }
+                .filterIsInstance<MalformedCoreRpcResponseException>()
+                .firstOrNull()
+                ?.let { throw it }
             if (electrumxFallback == null) throw e
             return electrumxFallback.nameShowWithFallback(identifier, servers)
         }
     }
 }
+
+/** A successful HTTP JSON-RPC envelope whose result shape cannot authorize a Namecoin answer. */
+internal class MalformedCoreRpcResponseException : IOException("Malformed successful Namecoin Core RPC response")
 
 internal const val MAX_NAMECOIN_VALUE_BYTES: Int = 1_023
 
