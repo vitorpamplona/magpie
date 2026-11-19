@@ -373,6 +373,21 @@ class ReleaseKeyTest {
     }
 
     @Test
+    fun aBunkerUriPastedWithATrailingNewlineStillConnects() {
+        MagpieWorld().use { world ->
+            TestBunker(world.relay, alice).use { bunker ->
+                val nostr = QuartzNostrIO(Http.client(), world.log, 3_000)
+                // CI secrets are often pasted with a newline: the secret sent must be the one the key is derived from.
+                BunkerSigner(" ${bunker.uri}\n", nostr, world.log, timeoutMs = 10_000, group = "com.example").use { signer ->
+                    assertEquals(alice.pubKey, runBlocking { signer.pubKey() })
+                }
+                nostr.close()
+                assertEquals(1, bunker.newClients.get())
+            }
+        }
+    }
+
+    @Test
     fun publishingRefusesAKeyTheDomainDoesNotVouchFor() {
         MagpieWorld().use { world ->
             world.setUpPublisher(mallory)
