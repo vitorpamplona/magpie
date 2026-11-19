@@ -235,7 +235,7 @@ public class TrustPolicy(
                     is VouchedKey.Found -> {
                         when {
                             locked == null -> {
-                                lock.update { it.withPublisher(rule.group, LockedPublisher(answer.pubKey, "nip05:${answer.identifier}")) }
+                                lock.update { it.withPublisher(rule.group, LockedPublisher(answer.pubKey, lockSource(answer.identifier))) }
                                 log.lifecycle("Magpie: trusting ${PublicKeys.npub(answer.pubKey)} for ${rule.group} (${answer.identifier}, recorded in magpie.lock)")
                             }
 
@@ -247,9 +247,9 @@ public class TrustPolicy(
                                 )
                             }
 
-                            locked.source != "nip05:${answer.identifier}" -> {
+                            locked.source != lockSource(answer.identifier) -> {
                                 // Same key, now vouched for by another identity on the chain.
-                                lock.update { it.withPublisher(rule.group, LockedPublisher(answer.pubKey, "nip05:${answer.identifier}")) }
+                                lock.update { it.withPublisher(rule.group, LockedPublisher(answer.pubKey, lockSource(answer.identifier))) }
                             }
                         }
                         relayHints?.put(answer.pubKey, answer.relays)

@@ -33,8 +33,8 @@ import com.vitorpamplona.magpie.core.publish.PublishSettings
 import com.vitorpamplona.magpie.core.publish.Publisher
 import com.vitorpamplona.magpie.core.publish.ReleaseKeyCheck
 import com.vitorpamplona.magpie.core.publish.SecretKeySigner
-import com.vitorpamplona.magpie.core.resolve.HttpNip05Resolver
 import com.vitorpamplona.magpie.core.resolve.LocalRepoServer
+import com.vitorpamplona.magpie.core.resolve.Nip05ResolverFactory
 import com.vitorpamplona.magpie.core.util.MagpieLog
 import com.vitorpamplona.magpie.core.util.QuartzLogs
 import kotlinx.coroutines.runBlocking
@@ -110,8 +110,8 @@ public class MagpieEngineImpl : MagpieEngine {
                 val keyCheck =
                     when (val check = config[EngineConfig.RELEASE_KEY_CHECK]?.takeIf { it.isNotBlank() } ?: EngineConfig.RELEASE_KEY_DOMAIN) {
                         EngineConfig.RELEASE_KEY_OFF -> null
-                        EngineConfig.RELEASE_KEY_DOMAIN -> ReleaseKeyCheck(HttpNip05Resolver(http, config[ResolverStack.NIP05_BASE_URL]?.takeIf { it.isNotBlank() }))
-                        else -> ReleaseKeyCheck(HttpNip05Resolver(http, config[ResolverStack.NIP05_BASE_URL]?.takeIf { it.isNotBlank() }), identifier = check)
+                        EngineConfig.RELEASE_KEY_DOMAIN -> ReleaseKeyCheck(Nip05ResolverFactory.create(http, config))
+                        else -> ReleaseKeyCheck(Nip05ResolverFactory.create(http, config), identifier = check)
                     }
                 val publisher = Publisher(nostr, BlossomClient(http, log), signer, http, log, keyCheck = keyCheck)
                 return runBlocking {

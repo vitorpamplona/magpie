@@ -56,11 +56,34 @@ public final class EngineConfig {
     /** "true" to refuse to change the lock (CI): new entries fail the build instead. */
     public static final String LOCK_FROZEN = "lockFrozen";
 
+    // Namecoin NIP-05 resolution
+    /** Namecoin backend: {@link #NAMECOIN_BACKEND_DISABLED}, Core RPC, or server-trusting ElectrumX. */
+    public static final String NAMECOIN_BACKEND = "namecoinBackend";
+    public static final String NAMECOIN_BACKEND_DISABLED = "disabled";
+    public static final String NAMECOIN_BACKEND_CORE_RPC = "coreRpc";
+    public static final String NAMECOIN_BACKEND_ELECTRUMX = "electrumx";
+    /** Namecoin Core JSON-RPC URL. Credentials are read from environment variables instead. */
+    public static final String NAMECOIN_CORE_RPC_URL = "namecoinCoreRpcUrl";
+    /** Names, not values, of environment variables holding Core RPC credentials. */
+    public static final String NAMECOIN_CORE_RPC_USERNAME_ENV = "namecoinCoreRpcUsernameEnv";
+    public static final String NAMECOIN_CORE_RPC_PASSWORD_ENV = "namecoinCoreRpcPasswordEnv";
+    public static final String DEFAULT_NAMECOIN_CORE_RPC_USERNAME_ENV = "MAGPIE_NAMECOIN_RPC_USERNAME";
+    public static final String DEFAULT_NAMECOIN_CORE_RPC_PASSWORD_ENV = "MAGPIE_NAMECOIN_RPC_PASSWORD";
+    /** ElectrumX endpoints, newline-separated: ssl://host:port or tcp://host:port. */
+    public static final String NAMECOIN_ELECTRUMX_SERVERS = "namecoinElectrumxServers";
+    /** Overall Namecoin lookup and traversal timeout, in milliseconds. */
+    public static final String NAMECOIN_LOOKUP_TIMEOUT_MS = "namecoinLookupTimeoutMs";
+    /** "true" to try configured ElectrumX servers when Core RPC is unreachable. */
+    public static final String NAMECOIN_CORE_RPC_FALLBACK_TO_ELECTRUMX = "namecoinCoreRpcFallbackToElectrumx";
+    /** Relay hints for the printed Namecoin value, newline-separated. */
+    public static final String NAMECOIN_RELAYS = "namecoinRelays";
+
     // Publishing
     public static final String TASK_PUBLISH = "publish";
     public static final String TASK_CLOSE = "close";
     public static final String TASK_CREATE_SERVER_LIST = "createServerList";
     public static final String TASK_CREATE_RELAY_LIST = "createRelayList";
+    public static final String TASK_PRINT_NAMECOIN_VALUE = "printNamecoinValue";
 
     /** The local Maven repository maven-publish wrote ({@code build/magpie-repo}). */
     public static final String REPO_DIR = "repoDir";
