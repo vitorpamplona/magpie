@@ -20,6 +20,10 @@
  */
 package com.vitorpamplona.magpie.bridge;
 
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.util.Locale;
+
 /** Keys of the configuration maps the plugin hands the engine. Lists are newline-separated. */
 public final class EngineConfig {
     private EngineConfig() {}
@@ -63,7 +67,10 @@ public final class EngineConfig {
     public static final String NAMECOIN_BACKEND_DISABLED = "disabled";
     public static final String NAMECOIN_BACKEND_CORE_RPC = "coreRpc";
     public static final String NAMECOIN_BACKEND_ELECTRUMX = "electrumx";
-    /** Namecoin Core JSON-RPC URL. Credentials are read from environment variables instead. */
+    /**
+     * Namecoin Core JSON-RPC URL. Credentials are read from environment variables instead. Plain
+     * HTTP is restricted to loopback; remote endpoints require HTTPS.
+     */
     public static final String NAMECOIN_CORE_RPC_URL = "namecoinCoreRpcUrl";
     /** Names, not values, of environment variables holding Core RPC credentials. */
     public static final String NAMECOIN_CORE_RPC_USERNAME_ENV = "namecoinCoreRpcUsernameEnv";
@@ -118,4 +125,75 @@ public final class EngineConfig {
     public static final String RELEASE_KEY_OFF = "off";
     /** "true" to skip publishing events (dry run). */
     public static final String DRY_RUN = "dryRun";
+
+    /**
+     * Validates a Core RPC endpoint before it enters Gradle configuration-cache inputs. Errors
+     * deliberately never include the configured value, which may contain credential markers.
+     */
+    public static String validateNamecoinCoreRpcUrl(String configuredUrl) {
+        String url = configuredUrl == null ? "" : configuredUrl.trim();
+        URI uri;
+        try {
+            uri = new URI(url);
+        } catch (URISyntaxException e) {
+            throw new IllegalArgumentException("Namecoin Core RPC URL is not a valid absolute URL");
+        }
+        String scheme = uri.getScheme();
+        if (scheme == null
+                || !(scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))) {
+            throw new IllegalArgumentException("Namecoin Core RPC URL must use http:// or https://");
+        }
+        if (uri.getRawUserInfo() != null) {
+            throw new IllegalArgumentException(
+                    "Namecoin Core RPC credentials must use environment variables, not URL user information");
+        }
+        String host = uri.getHost();
+        if (host == null || host.isEmpty()) {
+            throw new IllegalArgumentException("Namecoin Core RPC URL needs a valid host");
+        }
+        if (uri.getRawQuery() != null || uri.getRawFragment() != null) {
+            throw new IllegalArgumentException("Namecoin Core RPC URL must not contain a query or fragment");
+        }
+        int port = uri.getPort();
+        if (port == 0 || port < -1 || port > 65535) {
+            throw new IllegalArgumentException("Namecoin Core RPC URL has an invalid port");
+        }
+        if (scheme.equalsIgnoreCase("http") && !isLoopback(host)) {
+            throw new IllegalArgumentException(
+                    "Namecoin Core RPC plain HTTP is restricted to loopback; use HTTPS for a remote endpoint");
+        }
+        return url;
+    }
+
+    private static boolean isLoopback(String configuredHost) {
+        String host = configuredHost.toLowerCase(Locale.ROOT);
+        if (host.startsWith("[") && host.endsWith("]")) {
+            host = host.substring(1, host.length() - 1);
+        }
+        if (host.endsWith(".")) {
+            host = host.substring(0, host.length() - 1);
+        }
+        if (host.equals("localhost") || host.equals("::1") || host.equals("0:0:0:0:0:0:0:1")) {
+            return true;
+        }
+        String[] octets = host.split("\\.", -1);
+        if (octets.length != 4) {
+            return false;
+        }
+        int[] values = new int[4];
+        try {
+            for (int i = 0; i < octets.length; i++) {
+                if (octets[i].isEmpty()) {
+                    return false;
+                }
+                values[i] = Integer.parseInt(octets[i]);
+                if (values[i] < 0 || values[i] > 255) {
+                    return false;
+                }
+            }
+        } catch (NumberFormatException e) {
+            return false;
+        }
+        return values[0] == 127;
+    }
 }

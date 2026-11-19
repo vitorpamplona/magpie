@@ -285,7 +285,7 @@ class NamecoinFactoryTest {
     }
 
     @Test
-    fun electrumxEndpointsAreExplicitAndRpcUrlsCannotContainCredentials() {
+    fun electrumxEndpointsAreExplicitAndRpcUrlsAreValidatedWithoutLeakingCredentials() {
         val servers = parseElectrumxServers(listOf("ssl://one.example:50002", "tcp://two.example:50001"))
         assertEquals(listOf(true, false), servers.map { it.useSsl })
         assertEquals(listOf("one.example", "two.example"), servers.map { it.host })
@@ -295,9 +295,22 @@ class NamecoinFactoryTest {
 
         val http = Http.client()
         try {
+            val marker = "rpc-credential-marker"
+            val credentialError =
+                assertFailsWith<IllegalArgumentException> {
+                    Nip05ResolverFactory.create(http, config("http://$marker@127.0.0.1:8336/")) { null }
+                }
+            assertFalse(marker in credentialError.message.orEmpty(), credentialError.message)
+            val transportError =
+                assertFailsWith<IllegalArgumentException> {
+                    Nip05ResolverFactory.create(http, config("http://example.com:8336/")) { null }
+                }
+            assertTrue("use HTTPS" in transportError.message.orEmpty(), transportError.message)
             assertFailsWith<IllegalArgumentException> {
-                Nip05ResolverFactory.create(http, config("http://user:password@127.0.0.1:8336/")) { null }
+                Nip05ResolverFactory.create(http, config("ftp://127.0.0.1:8336/")) { null }
             }
+            listOf("http://localhost:8336/", "http://127.0.0.1:8336/", "http://[::1]:8336/", "https://example.com:8336/")
+                .forEach { url -> Nip05ResolverFactory.create(http, config(url)) { null } }
             assertFailsWith<IllegalArgumentException> {
                 Nip05ResolverFactory.create(
                     http,

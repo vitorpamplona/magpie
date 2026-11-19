@@ -22,6 +22,7 @@ package com.vitorpamplona.magpie.gradle
 
 import com.vitorpamplona.magpie.testkit.TestBunker
 import org.gradle.testkit.runner.TaskOutcome
+import java.io.File
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -197,6 +198,61 @@ class NamecoinGradleTest {
             )
         val result = builds.fail(app, "run")
         assertTrue("Namecoin resolution is disabled for releases@example.bit" in result.output, result.output)
+    }
+
+    @Test
+    fun coreRpcUrlsAreRejectedBeforeConfigurationCacheInputs() {
+        val marker = "magpie-rpc-credential-marker"
+        val lib =
+            builds.javaLibrary(
+                "lib",
+                "1.0.0",
+                extraMagpie =
+                    """
+                    verifyReleaseKey.set(false)
+                    namecoin {
+                        backend.set("coreRpc")
+                        coreRpcUrl.set("http://$marker@127.0.0.1:8336")
+                    }
+                    """.trimIndent(),
+            )
+        val result =
+            builds.fail(
+                lib,
+                "printMagpieNamecoinValue",
+                "--pubkey=${builds.publisher.pubKey}",
+                "--configuration-cache",
+            )
+        assertTrue("URL user information" in result.output, result.output)
+        assertFalse(marker in result.output, result.output)
+        val cache = File(lib, ".gradle/configuration-cache")
+        val persistedMarker =
+            cache.walkTopDown().any { file ->
+                file.isFile && file.readBytes().toString(Charsets.ISO_8859_1).contains(marker)
+            }
+        assertFalse(persistedMarker, "The credential marker reached configuration-cache data")
+
+        val remote =
+            builds.javaLibrary(
+                "remote",
+                "1.0.0",
+                extraMagpie =
+                    """
+                    verifyReleaseKey.set(false)
+                    namecoin {
+                        backend.set("coreRpc")
+                        coreRpcUrl.set("http://example.com:8336")
+                    }
+                    """.trimIndent(),
+            )
+        val remoteResult =
+            builds.fail(
+                remote,
+                "printMagpieNamecoinValue",
+                "--pubkey=${builds.publisher.pubKey}",
+                "--configuration-cache",
+            )
+        assertTrue("use HTTPS" in remoteResult.output, remoteResult.output)
     }
 
     private val expectedNamecoinValue: String

@@ -64,12 +64,9 @@ public object Nip05ResolverFactory {
         val client: IElectrumXClient =
             when (backend) {
                 EngineConfig.NAMECOIN_BACKEND_CORE_RPC -> {
-                    val url = config[EngineConfig.NAMECOIN_CORE_RPC_URL]?.trim().orEmpty()
+                    val url = EngineConfig.validateNamecoinCoreRpcUrl(config[EngineConfig.NAMECOIN_CORE_RPC_URL])
                     val parsed = url.toHttpUrlOrNull()
-                    require(parsed != null) { "Namecoin Core RPC needs an http:// or https:// URL" }
-                    require(parsed.username.isEmpty() && parsed.password.isEmpty()) {
-                        "Namecoin Core RPC credentials must use environment variables, not the URL"
-                    }
+                    require(parsed != null) { "Namecoin Core RPC URL is not supported by the HTTP client" }
                     val usernameEnv =
                         config[EngineConfig.NAMECOIN_CORE_RPC_USERNAME_ENV]?.takeIf { it.isNotBlank() }
                             ?: EngineConfig.DEFAULT_NAMECOIN_CORE_RPC_USERNAME_ENV

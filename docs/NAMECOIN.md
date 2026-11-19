@@ -64,7 +64,9 @@ identity on that group's DNS domains.
 The default credential environment variable names are `MAGPIE_NAMECOIN_RPC_USERNAME` and
 `MAGPIE_NAMECOIN_RPC_PASSWORD`. Their values are read only from the environment. The Gradle model
 contains the variable names, not the credentials. RPC URLs containing user information are
-rejected.
+rejected before the URL can enter Gradle configuration-cache inputs. Validation errors do not
+include the configured URL. Plain HTTP is accepted only for literal loopback hosts such as
+`localhost`, `127.0.0.1`, and `::1`. Remote Core RPC endpoints must use HTTPS.
 
 The names can be changed without changing where the values come from:
 

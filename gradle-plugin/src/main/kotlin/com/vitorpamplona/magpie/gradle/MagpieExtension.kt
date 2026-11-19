@@ -199,7 +199,9 @@ class MagpieNamecoinSpec internal constructor(
     internal fun engineConfig(): Map<String, String> =
         buildMap {
             put(EngineConfig.NAMECOIN_BACKEND, backend.get())
-            coreRpcUrl.orNull?.takeIf { it.isNotBlank() }?.let { put(EngineConfig.NAMECOIN_CORE_RPC_URL, it) }
+            coreRpcUrl.orNull?.takeIf { it.isNotBlank() }?.let {
+                put(EngineConfig.NAMECOIN_CORE_RPC_URL, EngineConfig.validateNamecoinCoreRpcUrl(it))
+            }
             put(EngineConfig.NAMECOIN_CORE_RPC_USERNAME_ENV, coreRpcUsernameEnv.get())
             put(EngineConfig.NAMECOIN_CORE_RPC_PASSWORD_ENV, coreRpcPasswordEnv.get())
             put(EngineConfig.NAMECOIN_ELECTRUMX_SERVERS, electrumxServers.get().joinToString("\n"))
