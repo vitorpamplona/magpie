@@ -111,7 +111,7 @@ public object Nip05ResolverFactory {
 internal fun parseElectrumxServers(configured: List<String>): List<ElectrumxServer> =
     configured.map { endpoint ->
         val value = endpoint.trim()
-        val uri = URI(if ("://" in value) value else "ssl://$value")
+        val uri = URI(value)
         val useSsl =
             when (uri.scheme?.lowercase()) {
                 "ssl" -> true

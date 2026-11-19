@@ -34,6 +34,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.Credentials
 import java.io.File
 import java.net.InetSocketAddress
+import java.net.ServerSocket
 import java.nio.file.Files
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -188,11 +189,34 @@ class NamecoinFactoryTest {
     }
 
     @Test
+    fun electrumxTransportFailuresAreUnreachableRatherThanAbsent() {
+        val port = ServerSocket(0).use { it.localPort }
+        val http = Http.client()
+        try {
+            val resolver =
+                Nip05ResolverFactory.create(
+                    http,
+                    mapOf(
+                        EngineConfig.NAMECOIN_BACKEND to EngineConfig.NAMECOIN_BACKEND_ELECTRUMX,
+                        EngineConfig.NAMECOIN_ELECTRUMX_SERVERS to "tcp://127.0.0.1:$port",
+                        EngineConfig.NAMECOIN_LOOKUP_TIMEOUT_MS to "250",
+                    ),
+                ) { null }
+            val answer = runBlocking { resolver.lookup("releases@example.bit") }
+            assertIs<Nip05Answer.Unreachable>(answer)
+        } finally {
+            http.dispatcher.executorService.shutdown()
+            http.connectionPool.evictAll()
+        }
+    }
+
+    @Test
     fun electrumxEndpointsAreExplicitAndRpcUrlsCannotContainCredentials() {
-        val servers = parseElectrumxServers(listOf("ssl://one.example:50002", "tcp://two.example:50001", "three.example:50002"))
-        assertEquals(listOf(true, false, true), servers.map { it.useSsl })
-        assertEquals(listOf("one.example", "two.example", "three.example"), servers.map { it.host })
+        val servers = parseElectrumxServers(listOf("ssl://one.example:50002", "tcp://two.example:50001"))
+        assertEquals(listOf(true, false), servers.map { it.useSsl })
+        assertEquals(listOf("one.example", "two.example"), servers.map { it.host })
         assertFailsWith<IllegalArgumentException> { parseElectrumxServers(listOf("https://one.example:50002")) }
+        assertFailsWith<IllegalArgumentException> { parseElectrumxServers(listOf("three.example:50002")) }
         assertFailsWith<IllegalArgumentException> { parseElectrumxServers(listOf("ssl://one.example")) }
 
         val http = Http.client()

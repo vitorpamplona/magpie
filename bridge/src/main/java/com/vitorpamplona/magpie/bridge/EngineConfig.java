@@ -36,7 +36,8 @@ public final class EngineConfig {
     public static final String INDEX_RELAYS = "indexRelays";
     /**
      * {@code <group>=domain} (the group's domain vouches: {@code releases@<domain>}),
-     * {@code <group>=nip05:<name@domain>} or {@code <group>=<npub|hex>}, newline-separated.
+     * {@code <group>=nip05:<name@domain>}, {@code <group>=namecoin:<releases@name.bit>},
+     * or {@code <group>=<npub|hex>}, newline-separated.
      */
     public static final String GROUPS = "groups";
     /** Blossom servers tried after the release's hints and the publisher's kind 10063. */
@@ -108,7 +109,7 @@ public final class EngineConfig {
     /**
      * Which key the group's domain must vouch for before publishing: {@link #RELEASE_KEY_DOMAIN}
      * (default: {@code releases@} down the group's domain chain), a NIP-05 identifier on that
-     * chain, or {@link #RELEASE_KEY_OFF}.
+     * chain, an explicit {@code namecoin:releases@name.bit} mapping, or {@link #RELEASE_KEY_OFF}.
      */
     public static final String RELEASE_KEY_CHECK = "releaseKeyCheck";
     public static final String RELEASE_KEY_DOMAIN = "domain";

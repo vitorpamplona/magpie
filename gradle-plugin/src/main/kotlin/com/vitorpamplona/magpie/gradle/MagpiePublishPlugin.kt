@@ -25,6 +25,7 @@ import org.gradle.api.Action
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.model.ObjectFactory
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.publish.PublishingExtension
@@ -44,7 +45,17 @@ import javax.inject.Inject
  */
 abstract class MagpiePublishExtension
     @Inject
-    constructor() {
+    constructor(
+        objects: ObjectFactory,
+    ) {
+        /** The same Namecoin connection policy used by the settings plugin. */
+        val namecoin: MagpieNamecoinSpec = MagpieNamecoinSpec(objects)
+
+        /** Configures Namecoin for publication's current exact-key check. */
+        fun namecoin(action: Action<MagpieNamecoinSpec>) {
+            action.execute(namecoin)
+        }
+
         /**
          * Index relays: where your relay list (kind 10002) is looked up, besides the relays your
          * domain's nostr.json lists for your key. Your server list and releases then live on your
@@ -67,8 +78,18 @@ abstract class MagpiePublishExtension
         /** A NIP-05 identity on the group's domains to check instead of `releases@` (`maven@example.com`). */
         abstract val releaseKeyNip05: Property<String>
 
+        /** An explicit Namecoin identity, allowing a legacy DNS group to use releases@example.bit. */
+        abstract val releaseKeyNamecoin: Property<String>
+
         /** Testing hook: NIP-05 lookups go to this base URL (`{domain}` stands for the domain). */
         abstract val nip05BaseUrl: Property<String>
+
+        /** Relay hints included by printMagpieNamecoinValue. */
+        abstract val namecoinRelays: ListProperty<String>
+
+        fun namecoinRelays(vararg urls: String) {
+            namecoinRelays.addAll(urls.toList())
+        }
 
         val signer: MagpieSignerSpec = MagpieSignerSpec()
 
@@ -106,6 +127,7 @@ class MagpiePublishPlugin : Plugin<Project> {
         val ext = project.extensions.create("magpie", MagpiePublishExtension::class.java)
         ext.partialsDir.convention(project.layout.buildDirectory.dir("magpie/partials"))
         ext.verifyReleaseKey.convention(true)
+        ext.namecoinRelays.convention(emptyList())
         // Also settable as Gradle properties (comma-separated), so a build can apply the plugin
         // only for releases without naming its types in the build script.
         ext.indexRelays.convention(
@@ -158,10 +180,18 @@ class MagpiePublishPlugin : Plugin<Project> {
             task.nsecEnv.set(project.provider { ext.signer.nsecEnv })
             task.releaseKeyCheck.set(
                 ext.verifyReleaseKey.flatMap { verify ->
-                    if (verify) ext.releaseKeyNip05.orElse(EngineConfig.RELEASE_KEY_DOMAIN) else project.provider { EngineConfig.RELEASE_KEY_OFF }
+                    if (verify) {
+                        ext.releaseKeyNamecoin
+                            .map { "namecoin:${it.trim().lowercase()}" }
+                            .orElse(ext.releaseKeyNip05)
+                            .orElse(EngineConfig.RELEASE_KEY_DOMAIN)
+                    } else {
+                        project.provider { EngineConfig.RELEASE_KEY_OFF }
+                    }
                 },
             )
             task.nip05BaseUrl.set(ext.nip05BaseUrl)
+            task.namecoinConfig.set(ext.namecoin.engineConfig())
         }
 
         project.tasks.register("publishToNostr", PublishToNostrTask::class.java) {
@@ -192,6 +222,12 @@ class MagpiePublishPlugin : Plugin<Project> {
             configure(this)
             description = "Publishes your relay list (kind 10002) to the index relays: --relay=wss://… (repeatable)."
             engineTask.set(EngineConfig.TASK_CREATE_RELAY_LIST)
+        }
+        project.tasks.register("printMagpieNamecoinValue", PrintNamecoinValueTask::class.java) {
+            configure(this)
+            description = "Prints a deterministic Namecoin value for releases@<domain>.bit without publishing anything."
+            engineTask.set(EngineConfig.TASK_PRINT_NAMECOIN_VALUE)
+            listedRelays.set(ext.namecoinRelays)
         }
     }
 }

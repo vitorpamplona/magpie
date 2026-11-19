@@ -31,6 +31,7 @@ import com.vitorpamplona.magpie.spec.LockedPublisher
 import com.vitorpamplona.magpie.spec.PublicKeys
 import com.vitorpamplona.magpie.spec.ReleaseIdentity
 import com.vitorpamplona.quartz.nip01Core.core.HexKey
+import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.NamecoinNameResolver
 import com.vitorpamplona.quartz.nipFCMavenRepositories.release.MavenReleaseEvent
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -44,9 +45,11 @@ public sealed interface Pin {
         val pubKey: HexKey,
     ) : Pin
 
-    /** A configured NIP-05 identity, which must sit on one of the group's domains. */
+    /** A configured NIP-05 identity, normally constrained to one of the group's domains. */
     public data class Nip05(
         val identifier: String,
+        /** An explicit namecoin(...) declaration may cross from a legacy DNS group to .bit. */
+        val explicitNamecoin: Boolean = false,
     ) : Pin
 
     /** The default: `releases@<domain>` down the group's domain chain ([ReleaseIdentity]). */
@@ -55,11 +58,12 @@ public sealed interface Pin {
     public companion object {
         public const val DOMAIN: String = "domain"
 
-        /** `npub1…`, hex, `nip05:name@domain`, or `domain`. */
+        /** `npub1…`, hex, `nip05:name@domain`, `namecoin:releases@name.bit`, or `domain`. */
         public fun parse(value: String): Pin =
             when {
                 value == DOMAIN -> Domain
                 value.startsWith("nip05:") -> Nip05(value.removePrefix("nip05:").trim().lowercase())
+                value.startsWith("namecoin:") -> Nip05(value.removePrefix("namecoin:").trim().lowercase(), explicitNamecoin = true)
                 else -> Key(PublicKeys.parse(value))
             }
     }
@@ -171,9 +175,15 @@ public class TrustPolicy(
         rules.forEach { rule ->
             when (val pin = rule.pin) {
                 is Pin.Nip05 -> {
-                    require(ReleaseIdentity.belongsTo(pin.identifier, rule.group, registrableDomain)) {
-                        "${pin.identifier} can't vouch for ${rule.group}: its domain must be one of " +
-                            ReleaseIdentity.domains(rule.group, registrableDomain).ifEmpty { listOf("(none: the group is not a domain)") }.joinToString()
+                    if (pin.explicitNamecoin) {
+                        require(NamecoinNameResolver.isNamecoinIdentifier(pin.identifier)) {
+                            "${pin.identifier} is not a Namecoin identifier"
+                        }
+                    } else {
+                        require(ReleaseIdentity.belongsTo(pin.identifier, rule.group, registrableDomain)) {
+                            "${pin.identifier} can't vouch for ${rule.group}: its domain must be one of " +
+                                ReleaseIdentity.domains(rule.group, registrableDomain).ifEmpty { listOf("(none: the group is not a domain)") }.joinToString()
+                        }
                     }
                 }
 

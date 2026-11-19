@@ -45,6 +45,35 @@ files of every version you use, so a hijacked domain or a forged release fails y
 of reaching it. If it ever fails, check with the publisher before editing it. In CI, add
 `-Pmagpie.frozenLock=true` so builds only use what's already in the committed lock.
 
+### Namecoin release keys
+
+A reversed `.bit` group can discover its release key through Namecoin instead of HTTPS NIP-05:
+
+```kotlin
+magpie {
+    group("bit.example") // tries releases@example.bit
+    namecoin {
+        backend.set("coreRpc")
+        coreRpcUrl.set("http://127.0.0.1:8336")
+    }
+}
+```
+
+Set `MAGPIE_NAMECOIN_RPC_USERNAME` and `MAGPIE_NAMECOIN_RPC_PASSWORD` in the environment. Do not
+put credentials in the RPC URL or Gradle configuration. A legacy DNS-based group must opt in
+explicitly instead of being silently mapped to a `.bit` name:
+
+```kotlin
+magpie {
+    group("com.example") {
+        namecoin("releases@example.bit")
+    }
+}
+```
+
+Namecoin resolution is disabled by default. See [docs/NAMECOIN.md](docs/NAMECOIN.md) for the
+record format, ElectrumX configuration, lock behavior, and the print-only publisher task.
+
 ## Publish a library
 
 ### One-time setup

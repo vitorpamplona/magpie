@@ -96,6 +96,38 @@ class NamecoinTrustTest {
     }
 
     @Test
+    fun explicitNamecoinMappingCanCrossFromALegacyGroupWithoutChangingNip05Rules() {
+        val table = Table(mutableMapOf("releases@example.bit" to Nip05Answer.Key(alice)))
+        val explicit =
+            TrustPolicy(
+                listOf(GroupRule.parse("com.example=namecoin:releases@example.bit")),
+                LockStore(lockFile, false, log),
+                table,
+                false,
+                log,
+            )
+        assertEquals(alice, runBlocking { explicit.publisherFor("com.example") }!!.pubKey)
+        assertEquals(listOf("releases@example.bit"), table.asked)
+        assertEquals(
+            "namecoin:releases@example.bit",
+            LockFile
+                .parse(lockFile.readText())
+                .publishers
+                .getValue("com.example")
+                .source,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            TrustPolicy(
+                listOf(GroupRule.parse("com.example=nip05:releases@example.bit")),
+                LockStore(lockFile, false, log),
+                table,
+                false,
+                log,
+            )
+        }
+    }
+
+    @Test
     fun aFailedChildNeverFallsThroughToTheApexKey() {
         lock()
         val table =
@@ -162,6 +194,12 @@ class NamecoinTrustTest {
 
             table.answers["releases@example.bit"] = Nip05Answer.Absent
             assertFailsWith<ReleaseKeyMismatchException> { ReleaseKeyCheck(table).verify("bit.example", alice) }
+
+            table.answers["releases@example.bit"] = Nip05Answer.Key(alice)
+            assertEquals(
+                emptyList(),
+                ReleaseKeyCheck(table, identifier = "releases@example.bit", explicitNamecoin = true).verify("com.example", alice),
+            )
             Unit
         }
 }

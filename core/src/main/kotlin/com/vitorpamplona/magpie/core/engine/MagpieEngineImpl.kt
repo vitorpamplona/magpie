@@ -29,6 +29,7 @@ import com.vitorpamplona.magpie.core.publish.BlossomClient
 import com.vitorpamplona.magpie.core.publish.BunkerSigner
 import com.vitorpamplona.magpie.core.publish.ListSettings
 import com.vitorpamplona.magpie.core.publish.MagpieSigner
+import com.vitorpamplona.magpie.core.publish.NamecoinValue
 import com.vitorpamplona.magpie.core.publish.PublishSettings
 import com.vitorpamplona.magpie.core.publish.Publisher
 import com.vitorpamplona.magpie.core.publish.ReleaseKeyCheck
@@ -111,7 +112,16 @@ public class MagpieEngineImpl : MagpieEngine {
                     when (val check = config[EngineConfig.RELEASE_KEY_CHECK]?.takeIf { it.isNotBlank() } ?: EngineConfig.RELEASE_KEY_DOMAIN) {
                         EngineConfig.RELEASE_KEY_OFF -> null
                         EngineConfig.RELEASE_KEY_DOMAIN -> ReleaseKeyCheck(Nip05ResolverFactory.create(http, config))
-                        else -> ReleaseKeyCheck(Nip05ResolverFactory.create(http, config), identifier = check)
+                        else ->
+                            if (check.startsWith("namecoin:")) {
+                                ReleaseKeyCheck(
+                                    Nip05ResolverFactory.create(http, config),
+                                    identifier = check.removePrefix("namecoin:"),
+                                    explicitNamecoin = true,
+                                )
+                            } else {
+                                ReleaseKeyCheck(Nip05ResolverFactory.create(http, config), identifier = check)
+                            }
                     }
                 val publisher = Publisher(nostr, BlossomClient(http, log), signer, http, log, keyCheck = keyCheck)
                 return runBlocking {
@@ -149,6 +159,14 @@ public class MagpieEngineImpl : MagpieEngine {
                         EngineConfig.TASK_CREATE_RELAY_LIST -> {
                             val event = publisher.createRelayList(config.list(EngineConfig.LIST_RELAYS), listSettings(config))
                             mapOf("event" to event.id)
+                        }
+
+                        EngineConfig.TASK_PRINT_NAMECOIN_VALUE -> {
+                            val value = NamecoinValue.render(signer.pubKey(), config.list(EngineConfig.NAMECOIN_RELAYS))
+                            mapOf(
+                                "namecoinValue" to value,
+                                "namecoinBytes" to value.toByteArray(Charsets.UTF_8).size.toString(),
+                            )
                         }
 
                         else -> {

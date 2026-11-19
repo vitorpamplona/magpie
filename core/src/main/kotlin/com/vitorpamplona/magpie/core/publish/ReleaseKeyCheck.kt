@@ -27,6 +27,7 @@ import com.vitorpamplona.magpie.core.resolve.vouch
 import com.vitorpamplona.magpie.spec.PublicKeys
 import com.vitorpamplona.magpie.spec.ReleaseIdentity
 import com.vitorpamplona.quartz.nip01Core.core.HexKey
+import com.vitorpamplona.quartz.nip05DnsIdentifiers.namecoin.NamecoinNameResolver
 
 public class ReleaseKeyMismatchException(
     message: String,
@@ -42,6 +43,8 @@ public class ReleaseKeyCheck(
     private val nip05: Nip05Resolver,
     /** A configured identity instead of the `releases@` chain. */
     private val identifier: String? = null,
+    /** Whether this is an explicit cross-domain namecoin(...) declaration. */
+    private val explicitNamecoin: Boolean = false,
     private val registrableDomain: (String) -> String? = PublicSuffix::registrableDomain,
 ) {
     /** Checks [signer] is [group]'s release key; returns the relays the domain lists for it. */
@@ -66,8 +69,12 @@ public class ReleaseKeyCheck(
     ): VouchedKey.Found {
         val identifiers =
             if (identifier != null) {
-                require(ReleaseIdentity.belongsTo(identifier, group, registrableDomain)) {
-                    "$identifier can't vouch for $group: its domain must be one of ${ReleaseIdentity.domains(group, registrableDomain).joinToString()}"
+                if (explicitNamecoin) {
+                    require(NamecoinNameResolver.isNamecoinIdentifier(identifier)) { "$identifier is not a Namecoin identifier" }
+                } else {
+                    require(ReleaseIdentity.belongsTo(identifier, group, registrableDomain)) {
+                        "$identifier can't vouch for $group: its domain must be one of ${ReleaseIdentity.domains(group, registrableDomain).joinToString()}"
+                    }
                 }
                 listOf(identifier)
             } else {
