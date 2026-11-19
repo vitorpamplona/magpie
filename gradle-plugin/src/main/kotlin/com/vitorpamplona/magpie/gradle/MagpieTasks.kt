@@ -36,6 +36,7 @@ import org.gradle.api.tasks.TaskAction
 import org.gradle.api.tasks.options.Option
 import org.gradle.jvm.toolchain.JavaLanguageVersion
 import org.gradle.jvm.toolchain.JavaToolchainService
+import org.gradle.work.DisableCachingByDefault
 import org.gradle.workers.WorkAction
 import org.gradle.workers.WorkParameters
 import org.gradle.workers.WorkerExecutor
@@ -47,6 +48,7 @@ import javax.inject.Inject
  * in the Gradle daemon (a native library binds to one class loader per JVM). Secrets are read from
  * the environment at execution, so they never land in the configuration cache.
  */
+@DisableCachingByDefault(because = "Engine tasks use environment-held signer credentials and isolated worker state")
 abstract class MagpieEngineTask : DefaultTask() {
     @get:Internal
     abstract val cacheRoot: DirectoryProperty
@@ -76,6 +78,10 @@ abstract class MagpieEngineTask : DefaultTask() {
     @get:Optional
     abstract val nip05BaseUrl: Property<String>
 
+    /** Non-secret Namecoin settings. Credential values remain in the environment. */
+    @get:Input
+    abstract val namecoinConfig: MapProperty<String, String>
+
     @get:Inject
     abstract val workers: WorkerExecutor
 
@@ -83,11 +89,11 @@ abstract class MagpieEngineTask : DefaultTask() {
     abstract val toolchains: JavaToolchainService
 
     /** Task-specific engine settings. */
-    @Internal
     protected open fun extraConfig(): Map<String, String> = emptyMap()
 
     @TaskAction
     fun run() {
+        val taskName = engineTask.get()
         val config =
             buildMap {
                 put(EngineConfig.INDEX_RELAYS, indexRelays.get().joinToString("\n"))
@@ -95,11 +101,23 @@ abstract class MagpieEngineTask : DefaultTask() {
                 put(EngineConfig.GROUP, groupId.get())
                 put(EngineConfig.RELEASE_KEY_CHECK, releaseKeyCheck.get())
                 nip05BaseUrl.orNull?.let { put(EngineConfig.NIP05_BASE_URL, it) }
+                putAll(namecoinConfig.get())
                 System.getenv(bunkerEnv.get())?.takeIf { it.isNotBlank() }?.let { put(EngineConfig.BUNKER_URI, it) }
                 System.getenv(nsecEnv.get())?.takeIf { it.isNotBlank() }?.let { put(EngineConfig.NSEC, it) }
                 putAll(extraConfig())
             }
-        if (EngineConfig.BUNKER_URI !in config && EngineConfig.NSEC !in config) {
+        val offlinePrint = taskName == EngineConfig.TASK_PRINT_NAMECOIN_VALUE && !config[EngineConfig.NAMECOIN_PUBKEY].isNullOrBlank()
+        if (taskName == EngineConfig.TASK_PRINT_NAMECOIN_VALUE && !offlinePrint && EngineConfig.BUNKER_URI in config) {
+            throw GradleException(
+                "Magpie: printMagpieNamecoinValue never contacts a NIP-46 bunker. Supply --pubkey with the 64-hex release pubkey.",
+            )
+        }
+        if (!offlinePrint && EngineConfig.BUNKER_URI !in config && EngineConfig.NSEC !in config) {
+            if (taskName == EngineConfig.TASK_PRINT_NAMECOIN_VALUE) {
+                throw GradleException(
+                    "Magpie: printMagpieNamecoinValue needs --pubkey with the 64-hex release pubkey or ${nsecEnv.get()} with a local secret key.",
+                )
+            }
             throw GradleException(
                 "Magpie: no signer. Set ${bunkerEnv.get()} to a NIP-46 bunker:// URI (recommended for CI) or ${nsecEnv.get()} to a secret key.",
             )
@@ -119,7 +137,7 @@ abstract class MagpieEngineTask : DefaultTask() {
                 forkOptions.maxHeapSize = "512m"
             }
         queue.submit(MagpieWorkAction::class.java) {
-            task.set(engineTask)
+            task.set(taskName)
             this.config.set(config)
             cacheRoot.set(this@MagpieEngineTask.cacheRoot)
             result.set(resultFile)
@@ -131,6 +149,7 @@ abstract class MagpieEngineTask : DefaultTask() {
     protected open fun onResult(result: Map<String, String>) {}
 }
 
+@DisableCachingByDefault(because = "Publishes external state using environment-held signer credentials")
 abstract class PublishToNostrTask : MagpieEngineTask() {
     @get:Internal
     abstract val repoDir: DirectoryProperty
@@ -191,6 +210,7 @@ abstract class PublishToNostrTask : MagpieEngineTask() {
     }
 }
 
+@DisableCachingByDefault(because = "Publishes external state using environment-held signer credentials")
 abstract class CloseNostrReleaseTask : MagpieEngineTask() {
     @get:Input
     abstract val version: Property<String>
@@ -219,6 +239,7 @@ abstract class CloseNostrReleaseTask : MagpieEngineTask() {
     }
 }
 
+@DisableCachingByDefault(because = "Publishes external state using environment-held signer credentials")
 abstract class CreateServerListTask : MagpieEngineTask() {
     @get:Input
     abstract val servers: ListProperty<String>
@@ -234,6 +255,7 @@ abstract class CreateServerListTask : MagpieEngineTask() {
     }
 }
 
+@DisableCachingByDefault(because = "Publishes external state using environment-held signer credentials")
 abstract class CreateRelayListTask : MagpieEngineTask() {
     @get:Input
     abstract val listedRelays: ListProperty<String>
@@ -246,6 +268,37 @@ abstract class CreateRelayListTask : MagpieEngineTask() {
     override fun extraConfig(): Map<String, String> {
         if (listedRelays.get().isEmpty()) throw GradleException("Give at least one --relay=wss://…")
         return mapOf(EngineConfig.LIST_RELAYS to listedRelays.get().joinToString("\n"))
+    }
+}
+
+/** Prints the value to store in d/example for releases@example.bit, without any network write. */
+@DisableCachingByDefault(because = "Prints offline output and supports environment-held local signer credentials")
+abstract class PrintNamecoinValueTask : MagpieEngineTask() {
+    @get:Input
+    abstract val listedRelays: ListProperty<String>
+
+    @get:Input
+    @get:Optional
+    abstract val offlinePubkey: Property<String>
+
+    @Option(option = "pubkey", description = "The 64-hex release pubkey, used offline without contacting any signer.")
+    fun setPubkeyOption(value: String) {
+        offlinePubkey.set(value.trim())
+    }
+
+    @Option(option = "relay", description = "A relay hint for the Namecoin value (wss://…); repeat for more.")
+    fun setRelayOption(values: List<String>) {
+        listedRelays.set(values)
+    }
+
+    override fun extraConfig(): Map<String, String> =
+        buildMap {
+            put(EngineConfig.NAMECOIN_RELAYS, listedRelays.get().joinToString("\n"))
+            offlinePubkey.orNull?.let { put(EngineConfig.NAMECOIN_PUBKEY, it) }
+        }
+
+    override fun onResult(result: Map<String, String>) {
+        logger.lifecycle(result.getValue("namecoinValue"))
     }
 }
 

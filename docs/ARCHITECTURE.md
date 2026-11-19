@@ -52,9 +52,11 @@ BUD-02 authorization, BUD-06 preflight), which Quartz doesn't have as a client.
 3. Per request, `Router`:
    - parses the path (`MavenPath`); unknown groups are 404;
    - finds the trusted key (`TrustPolicy`): by default `releases@<domain>` down the group's
-     domain chain (`ReleaseIdentity`, `HttpNip05Resolver`), pinned in `gradle/magpie.lock`, where
-     a later change fails loudly; or a configured NIP-05 on those domains, or an npub. The
-     `relays` the domain's `nostr.json` lists for the key are kept (`RelayHints`, also on disk);
+     domain chain (`ReleaseIdentity`, `DispatchingNip05Resolver`), pinned in `gradle/magpie.lock`,
+     where a later change fails loudly; or a configured NIP-05 on those domains, an explicit
+     `namecoin(...)` identity, or an npub. Ordinary identities use `HttpNip05Resolver`; `.bit`
+     identities use Quartz's Namecoin resolver through the shared `Nip05ResolverFactory`. Relay
+     hints from either record format are kept (`RelayHints`, also on disk);
    - finds the key's relays (`RelayQuery.relaysFor`, the outbox model): the write relays of its
      newest kind 10002, looked up on the index relays and the `nostr.json` relays (10 min cache,
      disk fallback), plus the `nostr.json` relays; the index relays only when both are empty.
@@ -93,13 +95,16 @@ runs in a worker process:
 
 1. `RepoScanner` hashes every file of the group and version (skipping Gradle's sidecars and
    `maven-metadata.xml`, keeping `.asc`) into a `Manifest`.
-2. `ReleaseKeyCheck` reads the key the group's domain names (`releases@` down the domain
-   chain) and the relays `nostr.json` lists for it. Every check below runs with that key, and a
-   remote signer is only reached at step 6, right before its signature requests, where its key
-   must be the vouched one or nothing is sent to sign; so its connection approval and the
-   signatures arrive together. A local key is compared right away, and a check-only run
-   (`--check-only`) connects to compare the bunker's, since it signs nothing. When no domain
-   lists a key, the signer is reached to put its key in the error's `nostr.json` example. The publisher's kind 10002 is read from the index relays and those relays, then
+2. `ReleaseKeyCheck` reads the key the group's domain or explicit Namecoin identity names
+   (`releases@` down the domain chain by default) and the discovery record's relay hints. It uses
+   the same shared resolver factory as consumers and never accepts a locked key in place of a
+   successful current check. Every check below runs with that key, and a remote signer is only
+   reached at step 6, right before its signature requests, where its key must be the vouched one
+   or nothing is sent to sign; so its connection approval and the signatures arrive together. A
+   local key is compared right away, and a check-only run (`--check-only`) connects to compare the
+   bunker's, since it signs nothing. When no identity lists a key, the signer is reached to put
+   its key in the error's discovery-record example. The publisher's kind 10002 is read from the
+   index relays and those relays, then
    its kind 10063 also from the write relays the 10002 names; no 10063 → a failure that names
    `createNostrServerList`.
 3. `ModuleChecker` makes sure every file each `.module` references (and every `available-at`

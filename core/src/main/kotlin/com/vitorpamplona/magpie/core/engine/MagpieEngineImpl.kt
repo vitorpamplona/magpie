@@ -29,12 +29,13 @@ import com.vitorpamplona.magpie.core.publish.BlossomClient
 import com.vitorpamplona.magpie.core.publish.BunkerSigner
 import com.vitorpamplona.magpie.core.publish.ListSettings
 import com.vitorpamplona.magpie.core.publish.MagpieSigner
+import com.vitorpamplona.magpie.core.publish.NamecoinValue
 import com.vitorpamplona.magpie.core.publish.PublishSettings
 import com.vitorpamplona.magpie.core.publish.Publisher
 import com.vitorpamplona.magpie.core.publish.ReleaseKeyCheck
 import com.vitorpamplona.magpie.core.publish.SecretKeySigner
-import com.vitorpamplona.magpie.core.resolve.HttpNip05Resolver
 import com.vitorpamplona.magpie.core.resolve.LocalRepoServer
+import com.vitorpamplona.magpie.core.resolve.Nip05ResolverFactory
 import com.vitorpamplona.magpie.core.util.MagpieLog
 import com.vitorpamplona.magpie.core.util.QuartzLogs
 import kotlinx.coroutines.runBlocking
@@ -102,6 +103,7 @@ public class MagpieEngineImpl : MagpieEngine {
     ): Map<String, String> {
         val log = BridgeLog(logger)
         QuartzLogs.routeTo(log)
+        if (task == EngineConfig.TASK_PRINT_NAMECOIN_VALUE) return printNamecoinValue(config)
         val http = Http.client()
         val nostr = QuartzNostrIO(http, log)
         try {
@@ -110,8 +112,17 @@ public class MagpieEngineImpl : MagpieEngine {
                 val keyCheck =
                     when (val check = config[EngineConfig.RELEASE_KEY_CHECK]?.takeIf { it.isNotBlank() } ?: EngineConfig.RELEASE_KEY_DOMAIN) {
                         EngineConfig.RELEASE_KEY_OFF -> null
-                        EngineConfig.RELEASE_KEY_DOMAIN -> ReleaseKeyCheck(HttpNip05Resolver(http, config[ResolverStack.NIP05_BASE_URL]?.takeIf { it.isNotBlank() }))
-                        else -> ReleaseKeyCheck(HttpNip05Resolver(http, config[ResolverStack.NIP05_BASE_URL]?.takeIf { it.isNotBlank() }), identifier = check)
+                        EngineConfig.RELEASE_KEY_DOMAIN -> ReleaseKeyCheck(Nip05ResolverFactory.create(http, config))
+                        else ->
+                            if (check.startsWith("namecoin:")) {
+                                ReleaseKeyCheck(
+                                    Nip05ResolverFactory.create(http, config),
+                                    identifier = check.removePrefix("namecoin:"),
+                                    explicitNamecoin = true,
+                                )
+                            } else {
+                                ReleaseKeyCheck(Nip05ResolverFactory.create(http, config), identifier = check)
+                            }
                     }
                 val publisher = Publisher(nostr, BlossomClient(http, log), signer, http, log, keyCheck = keyCheck)
                 return runBlocking {
@@ -169,6 +180,27 @@ public class MagpieEngineImpl : MagpieEngine {
             group = config[EngineConfig.GROUP]?.takeIf { it.isNotBlank() },
             indexRelays = config.list(EngineConfig.INDEX_RELAYS),
         )
+
+    private fun printNamecoinValue(config: Map<String, String>): Map<String, String> {
+        val pubKey =
+            config[EngineConfig.NAMECOIN_PUBKEY]?.trim()?.takeIf { it.isNotEmpty() }
+                ?: run {
+                    check(config[EngineConfig.BUNKER_URI].isNullOrBlank()) {
+                        "printMagpieNamecoinValue never contacts a NIP-46 bunker. Supply --pubkey with the 64-hex release pubkey; " +
+                            "the bunker transport pubkey is not a substitute."
+                    }
+                    val nsec = config[EngineConfig.NSEC]?.takeIf { it.isNotBlank() }
+                    check(nsec != null) {
+                        "printMagpieNamecoinValue needs --pubkey with the 64-hex release pubkey or a local secret key."
+                    }
+                    runBlocking { SecretKeySigner(nsec).pubKey() }
+                }
+        val value = NamecoinValue.render(pubKey, config.list(EngineConfig.NAMECOIN_RELAYS))
+        return mapOf(
+            "namecoinValue" to value,
+            "namecoinBytes" to value.toByteArray(Charsets.UTF_8).size.toString(),
+        )
+    }
 
     private fun signerFor(
         config: Map<String, String>,

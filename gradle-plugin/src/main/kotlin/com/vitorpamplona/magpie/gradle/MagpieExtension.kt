@@ -20,9 +20,11 @@
  */
 package com.vitorpamplona.magpie.gradle
 
+import com.vitorpamplona.magpie.bridge.EngineConfig
 import org.gradle.api.Action
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.model.ObjectFactory
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
 import javax.inject.Inject
@@ -39,7 +41,17 @@ import javax.inject.Inject
  */
 abstract class MagpieExtension
     @Inject
-    constructor() {
+    constructor(
+        objects: ObjectFactory,
+    ) {
+        /** Namecoin backends for .bit NIP-05 identities. Disabled by default. */
+        val namecoin: MagpieNamecoinSpec = MagpieNamecoinSpec(objects)
+
+        /** Configures Namecoin without putting RPC credential values in the build model. */
+        fun namecoin(action: Action<MagpieNamecoinSpec>) {
+            action.execute(namecoin)
+        }
+
         /**
          * Index relays: where trusted keys' relay lists (kind 10002) are looked up. Each key's
          * releases are read from its own write relays and from the relays its domain's
@@ -122,8 +134,20 @@ class MagpieGroup(
         pin = if (identifier == null) DOMAIN else "nip05:" + identifier.trim().lowercase()
     }
 
+    /** Explicitly trusts a Namecoin identity, including for a legacy DNS-based Maven group. */
+    fun namecoin(identifier: String) {
+        pin = "namecoin:" + identifier.trim().lowercase()
+    }
+
     /** Catches the obvious misconfiguration early; the engine checks the public suffix list too. */
     internal fun validate() {
+        if (pin.startsWith("namecoin:")) {
+            val domain = pin.substringAfter('@', "")
+            require(domain.endsWith(".bit")) {
+                "Magpie: namecoin(...) needs an identity such as releases@example.bit"
+            }
+            return
+        }
         if (!pin.startsWith("nip05:")) return
         val domain = pin.substringAfter('@', "")
         val host =
@@ -140,4 +164,48 @@ class MagpieGroup(
     internal companion object {
         const val DOMAIN = "domain"
     }
+}
+
+/** Shared Namecoin connection policy for consumers and publishers. */
+class MagpieNamecoinSpec internal constructor(
+    objects: ObjectFactory,
+) {
+    /** `disabled`, `coreRpc`, or `electrumx`. ElectrumX is server-trusting, not SPV-verified. */
+    val backend: Property<String> =
+        objects.property(String::class.java).convention(EngineConfig.NAMECOIN_BACKEND_DISABLED)
+
+    /** Namecoin Core JSON-RPC endpoint. Do not put credentials in this URL. */
+    val coreRpcUrl: Property<String> = objects.property(String::class.java)
+
+    /** Environment variable names, never the RPC credential values. */
+    val coreRpcUsernameEnv: Property<String> =
+        objects.property(String::class.java).convention(EngineConfig.DEFAULT_NAMECOIN_CORE_RPC_USERNAME_ENV)
+    val coreRpcPasswordEnv: Property<String> =
+        objects.property(String::class.java).convention(EngineConfig.DEFAULT_NAMECOIN_CORE_RPC_PASSWORD_ENV)
+
+    /** Explicit ElectrumX endpoints, for example `ssl://electrumx.example:50002`. */
+    val electrumxServers: ListProperty<String> = objects.listProperty(String::class.java).convention(emptyList())
+
+    /** Overall lookup and traversal timeout. */
+    val lookupTimeoutMillis: Property<Long> = objects.property(Long::class.java).convention(20_000L)
+
+    /** If Core RPC is unreachable, explicitly allow the configured server-trusting ElectrumX fallback. */
+    val coreRpcFallbackToElectrumx: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
+
+    fun electrumxServers(vararg endpoints: String) {
+        electrumxServers.addAll(endpoints.toList())
+    }
+
+    internal fun engineConfig(): Map<String, String> =
+        buildMap {
+            put(EngineConfig.NAMECOIN_BACKEND, backend.get())
+            coreRpcUrl.orNull?.takeIf { it.isNotBlank() }?.let {
+                put(EngineConfig.NAMECOIN_CORE_RPC_URL, EngineConfig.validateNamecoinCoreRpcUrl(it))
+            }
+            put(EngineConfig.NAMECOIN_CORE_RPC_USERNAME_ENV, coreRpcUsernameEnv.get())
+            put(EngineConfig.NAMECOIN_CORE_RPC_PASSWORD_ENV, coreRpcPasswordEnv.get())
+            put(EngineConfig.NAMECOIN_ELECTRUMX_SERVERS, electrumxServers.get().joinToString("\n"))
+            put(EngineConfig.NAMECOIN_LOOKUP_TIMEOUT_MS, lookupTimeoutMillis.get().toString())
+            put(EngineConfig.NAMECOIN_CORE_RPC_FALLBACK_TO_ELECTRUMX, coreRpcFallbackToElectrumx.get().toString())
+        }
 }

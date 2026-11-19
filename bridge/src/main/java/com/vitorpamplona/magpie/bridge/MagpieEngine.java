@@ -32,9 +32,9 @@ public interface MagpieEngine {
     ResolverHandle startResolver(Map<String, String> config, EngineLogger logger) throws Exception;
 
     /**
-     * Runs one publishing task ({@link EngineConfig#TASK_PUBLISH}, {@link EngineConfig#TASK_CLOSE},
-     * {@link EngineConfig#TASK_CREATE_SERVER_LIST}) and returns a
-     * summary (event ids, manifest hash).
+     * Runs one publishing or local tooling task ({@link EngineConfig#TASK_PUBLISH},
+     * {@link EngineConfig#TASK_CLOSE}, {@link EngineConfig#TASK_CREATE_SERVER_LIST},
+     * {@link EngineConfig#TASK_PRINT_NAMECOIN_VALUE}) and returns a summary.
      */
     Map<String, String> runTask(String task, Map<String, String> config, EngineLogger logger) throws Exception;
 }

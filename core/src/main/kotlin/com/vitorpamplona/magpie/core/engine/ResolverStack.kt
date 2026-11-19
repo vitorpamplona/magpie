@@ -27,8 +27,8 @@ import com.vitorpamplona.magpie.core.resolve.BlobFetcher
 import com.vitorpamplona.magpie.core.resolve.BlobStore
 import com.vitorpamplona.magpie.core.resolve.ChecksumFiles
 import com.vitorpamplona.magpie.core.resolve.GroupRule
-import com.vitorpamplona.magpie.core.resolve.HttpNip05Resolver
 import com.vitorpamplona.magpie.core.resolve.LockStore
+import com.vitorpamplona.magpie.core.resolve.Nip05ResolverFactory
 import com.vitorpamplona.magpie.core.resolve.RelayHints
 import com.vitorpamplona.magpie.core.resolve.RelayQuery
 import com.vitorpamplona.magpie.core.resolve.RepositoryMirror
@@ -109,7 +109,7 @@ public class ResolverStack(
                     config.flag(EngineConfig.LOCK_FROZEN),
                     log,
                 )
-            val nip05 = HttpNip05Resolver(http, config[NIP05_BASE_URL]?.takeIf { it.isNotBlank() })
+            val nip05 = Nip05ResolverFactory.create(http, config)
             val hints = RelayHints(File(cacheDir, "nip05-relays"))
             val trust = TrustPolicy(config.list(EngineConfig.GROUPS).map { GroupRule.parse(it) }, lock, nip05, offline, log, relayHints = hints)
             val store = BlobStore(File(cacheDir, "blobs"))

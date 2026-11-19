@@ -61,7 +61,7 @@ public class RelayHints(
         relays: List<String>,
     ) {
         val clean = RelayUrls.clean(relays)
-        if (clean.isEmpty() || hints[pubKey] == clean) return
+        if (hints[pubKey] == clean) return
         hints[pubKey] = clean
         dir?.let { Files2.writeAtomically(File(it, "$pubKey.txt"), clean.joinToString("\n").toByteArray()) }
     }
