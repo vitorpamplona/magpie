@@ -24,6 +24,7 @@ import com.vitorpamplona.magpie.core.nostr.NostrIO
 import com.vitorpamplona.magpie.core.resolve.BlobFetcher
 import com.vitorpamplona.magpie.core.resolve.BlobStore
 import com.vitorpamplona.magpie.core.resolve.RelayUrls
+import com.vitorpamplona.magpie.core.resolve.VouchedKey
 import com.vitorpamplona.magpie.core.util.Clock
 import com.vitorpamplona.magpie.core.util.Files2
 import com.vitorpamplona.magpie.core.util.MagpieLog
@@ -137,6 +138,8 @@ public class Publisher(
      * header limit answers `400 Request Header Or Cookie Too Large` past about 78 hashes.
      */
     private val hashesPerAuth: Int = MAX_HASHES_PER_AUTH,
+    /** How many HEAD and BUD-06 checks run at once: small requests, so more than uploads. */
+    private val checkParallelism: Int = 32,
 ) {
     init {
         require(hashesPerAuth > 0) { "hashesPerAuth must be positive" }
@@ -145,11 +148,20 @@ public class Publisher(
     private fun now() = clock.nowMillis() / 1000
 
     /**
+     * The key a release must be signed with, when the domain vouched for it before the signer
+     * connected: the signer's own key must match it before anything is sent to sign.
+     */
+    @Volatile
+    private var vouched: Pair<VouchedKey.Found, String>? = null
+
+    /**
      * Signs [template] and checks what came back: the expected key, exactly the template asked
      * for, and a valid signature. A misbehaving bunker can't slip in another key or other tags.
      */
     private suspend fun signChecked(template: EventTemplate<*>): Event {
+        // A remote signer connects here, on the first request, right before it is asked to sign.
         val expected = signer.pubKey()
+        vouched?.let { (key, group) -> if (key.pubKey != expected) throw ReleaseKeyCheck.mismatch(key, group, expected) }
         val event = signer.sign(template)
         val problem =
             when {
@@ -173,8 +185,10 @@ public class Publisher(
     public suspend fun context(
         indexRelays: List<String>,
         domainRelays: List<String> = emptyList(),
+        /** The key to read the lists of, when known without connecting; else the signer's. */
+        key: HexKey? = null,
     ): PublisherContext {
-        val pubKey = signer.pubKey()
+        val pubKey = key ?: signer.pubKey()
         val (serverList, relayList) = readLists(pubKey, indexRelays, domainRelays)
         val servers =
             serverList
@@ -252,14 +266,29 @@ public class Publisher(
         }
     }
 
+    /**
+     * The release key and its domain's relays. With a key check, the domain names the key, so a
+     * remote signer is only connected when the release is ready to sign, next to its signature
+     * requests, and [signChecked] checks it is that key; without one, the signer is asked now.
+     */
+    private suspend fun releaseKey(group: String): Pair<HexKey, List<String>> {
+        vouched = null
+        val check = keyCheck ?: return signer.pubKey() to emptyList()
+        signer.pubKeyIfKnown()?.let { known -> return known to check.verify(group, known) }
+        val found = check.vouched(group)
+        vouched = found to group
+        log.lifecycle("Magpie: ${found.identifier} names ${PublicKeys.npub(found.pubKey)} as the release key; the signer is asked once the release is ready to sign")
+        return found.pubKey to found.relays
+    }
+
     public suspend fun publish(settings: PublishSettings): PublishResult {
         val root = settings.rootArtifact ?: RepoScanner.guessRootArtifact(settings.repoDir, settings.group, settings.version)
         val scanned = RepoScanner.scan(settings.repoDir, settings.group, settings.version, root, log)
         val manifest = scanned.manifest
         log.lifecycle("Magpie: ${manifest.coordinate} has ${manifest.files.size} files in ${manifest.artifacts.size} modules")
 
-        val domainRelays = keyCheck?.verify(settings.group, signer.pubKey()).orEmpty()
-        val context = context(settings.indexRelays, domainRelays)
+        val (key, domainRelays) = releaseKey(settings.group)
+        val context = context(settings.indexRelays, domainRelays, key)
         val relays = targets(context.pubKey, context.homeRelays, settings.indexRelays)
         if (!manifest.coordinate.isSnapshot) refuseOverwrite(manifest, context, relays)
 
@@ -300,8 +329,8 @@ public class Publisher(
         }
         log.lifecycle("Magpie: merged ${partials.size} partial manifests into ${manifest.files.size} files")
 
-        val domainRelays = keyCheck?.verify(settings.group, signer.pubKey()).orEmpty()
-        val context = context(settings.indexRelays, domainRelays)
+        val (key, domainRelays) = releaseKey(settings.group)
+        val context = context(settings.indexRelays, domainRelays, key)
         val relays = targets(context.pubKey, context.homeRelays, settings.indexRelays)
         if (!manifest.coordinate.isSnapshot) refuseOverwrite(manifest, context, relays)
 
@@ -309,7 +338,7 @@ public class Publisher(
         val present = ConcurrentHashMap<String, MutableSet<String>>()
         val wrongSize = ConcurrentHashMap.newKeySet<String>()
         coroutineScope {
-            val gate = Semaphore(parallelism)
+            val gate = Semaphore(checkParallelism)
             manifest.files
                 .flatMap { (key, file) ->
                     context.servers.map { server ->
@@ -503,7 +532,7 @@ public class Publisher(
         val refusals = ConcurrentHashMap<String, MutableList<String>>()
         val willTake = ConcurrentHashMap<String, MutableSet<String>>()
         coroutineScope {
-            val gate = Semaphore(parallelism)
+            val gate = Semaphore(checkParallelism)
             servers
                 .flatMap { server ->
                     unique.filter { server !in present.getValue(it.sha256) }.map { blob ->

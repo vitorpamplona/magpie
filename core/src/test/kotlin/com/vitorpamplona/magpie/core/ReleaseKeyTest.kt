@@ -22,7 +22,11 @@ package com.vitorpamplona.magpie.core
 
 import com.sun.net.httpserver.HttpServer
 import com.vitorpamplona.magpie.core.engine.Http
+import com.vitorpamplona.magpie.core.nostr.QuartzNostrIO
+import com.vitorpamplona.magpie.core.publish.BlossomClient
+import com.vitorpamplona.magpie.core.publish.MagpieSigner
 import com.vitorpamplona.magpie.core.publish.PublishSettings
+import com.vitorpamplona.magpie.core.publish.Publisher
 import com.vitorpamplona.magpie.core.publish.ReleaseKeyCheck
 import com.vitorpamplona.magpie.core.publish.ReleaseKeyMismatchException
 import com.vitorpamplona.magpie.core.publish.SecretKeySigner
@@ -36,17 +40,25 @@ import com.vitorpamplona.magpie.core.resolve.PublicSuffix
 import com.vitorpamplona.magpie.core.resolve.TrustPolicy
 import com.vitorpamplona.magpie.spec.LockFile
 import com.vitorpamplona.magpie.spec.LockedPublisher
+import com.vitorpamplona.magpie.spec.MagpieSpec
 import com.vitorpamplona.magpie.testkit.FakeMavenRepo
+import com.vitorpamplona.magpie.testkit.InMemoryBlossom
 import com.vitorpamplona.magpie.testkit.TestIdentity
+import com.vitorpamplona.quartz.nip01Core.core.Event
+import com.vitorpamplona.quartz.nip01Core.core.HexKey
+import com.vitorpamplona.quartz.nip01Core.relay.filters.Filter
+import com.vitorpamplona.quartz.nip01Core.signers.EventTemplate
 import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.net.InetSocketAddress
 import java.nio.file.Files
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /** The group's domain vouches for its release key: `releases@<domain>` down the domain chain. */
@@ -202,6 +214,66 @@ class ReleaseKeyTest {
             }
         } finally {
             server.stop(0)
+        }
+    }
+
+    /**
+     * A signer that, like a bunker, only knows its key once asked: it notes how many HEAD and
+     * BUD-06 checks the server had answered when it was first reached.
+     */
+    private class RemoteLikeSigner(
+        who: TestIdentity,
+        private val blossom: InMemoryBlossom,
+    ) : MagpieSigner {
+        private val real = SecretKeySigner(who.nsec)
+        val checksWhenReached = AtomicInteger(-1)
+        override val signatures: Int get() = real.signatures
+
+        override suspend fun pubKey(): HexKey {
+            checksWhenReached.compareAndSet(-1, blossom.heads.get() + blossom.preflights.get())
+            return real.pubKey()
+        }
+
+        override suspend fun sign(template: EventTemplate<*>): Event = real.sign(template)
+    }
+
+    @Test
+    fun aRemoteSignerIsReachedOnlyOnceTheReleaseIsReadyToSign() {
+        // The domain names the key, so every check runs before the signer is reached: its
+        // connection approval comes right before the signature requests.
+        MagpieWorld().use { world ->
+            world.setUpPublisher(alice)
+            val repo = FakeMavenRepo(world.dir("repo")).publish("1.0.0")
+            val vouches = Table(mutableMapOf("releases@example.com" to Nip05Answer.Key(alice.pubKey)))
+            val signer = RemoteLikeSigner(alice, world.blossom)
+            val http = Http.client()
+            val late = Publisher(QuartzNostrIO(http, world.log, 3_000), BlossomClient(http, world.log), signer, http, world.log, keyCheck = ReleaseKeyCheck(vouches))
+            val result = runBlocking { late.publish(PublishSettings(repo.dir, "com.example", "1.0.0", "lib", listOf(world.relay.url))) }
+
+            assertNotNull(result.eventId)
+            val checks = world.blossom.heads.get() + world.blossom.preflights.get()
+            assertTrue(checks > 0)
+            assertEquals(checks, signer.checksWhenReached.get(), "every check ran before the signer was reached")
+        }
+    }
+
+    @Test
+    fun aRemoteSignerWithTheWrongKeyIsRefusedBeforeAnythingIsSignedOrUploaded() {
+        MagpieWorld().use { world ->
+            world.setUpPublisher(alice)
+            val repo = FakeMavenRepo(world.dir("repo")).publish("1.0.0")
+            val vouches = Table(mutableMapOf("releases@example.com" to Nip05Answer.Key(alice.pubKey)))
+            val signer = RemoteLikeSigner(mallory, world.blossom)
+            val http = Http.client()
+            val publisher = Publisher(QuartzNostrIO(http, world.log, 3_000), BlossomClient(http, world.log), signer, http, world.log, keyCheck = ReleaseKeyCheck(vouches))
+            val error =
+                assertFailsWith<ReleaseKeyMismatchException> {
+                    runBlocking { publisher.publish(PublishSettings(repo.dir, "com.example", "1.0.0", "lib", listOf(world.relay.url))) }
+                }
+            assertTrue("releases@example.com" in error.message!! && mallory.npub in error.message!!, error.message)
+            assertEquals(0, signer.signatures, "nothing was sent to sign")
+            assertEquals(0, world.blossom.uploads.get(), "nothing was uploaded")
+            assertEquals(0, world.relay.query(Filter(kinds = listOf(MagpieSpec.KIND_RELEASE))).size)
         }
     }
 
