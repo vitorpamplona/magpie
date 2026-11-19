@@ -154,9 +154,20 @@ Relay options can instead be repeated on the command line:
   --relay=wss://two.example.com/nostr
 ```
 
-The task uses the selected signer pubkey and prints only the value. It does not publish a Nostr
-event, upload a Blossom blob, or create a Namecoin transaction. Update `d/example` separately with
-Namecoin Core or a wallet.
+With a local secret key, the task derives the release pubkey locally. A NIP-46 bunker is never
+contacted. When the selected signer is a bunker, supply the release pubkey explicitly:
+
+```bash
+./gradlew printMagpieNamecoinValue --pubkey=<64-hex-release-pubkey>
+```
+
+The explicit `--pubkey` takes precedence over every signer. Bunker-only configuration without it
+fails before opening a relay subscription or writing a NIP-46 client-key file. The bunker
+transport pubkey is never substituted for the signing identity.
+
+The task prints only the value. It does not open a relay subscription, publish a Nostr event or
+NIP-46 request, upload a Blossom blob, or create a Namecoin transaction. Update `d/example`
+separately with Namecoin Core or a wallet.
 
 The renderer enforces a 520 UTF-8-byte interoperable UI design budget before printing. This is not
 the 1,023-byte consensus bound. Invalid keys or relays, `.bit` relay endpoints, too many hints,

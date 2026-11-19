@@ -103,6 +103,7 @@ public class MagpieEngineImpl : MagpieEngine {
     ): Map<String, String> {
         val log = BridgeLog(logger)
         QuartzLogs.routeTo(log)
+        if (task == EngineConfig.TASK_PRINT_NAMECOIN_VALUE) return printNamecoinValue(config)
         val http = Http.client()
         val nostr = QuartzNostrIO(http, log)
         try {
@@ -161,14 +162,6 @@ public class MagpieEngineImpl : MagpieEngine {
                             mapOf("event" to event.id)
                         }
 
-                        EngineConfig.TASK_PRINT_NAMECOIN_VALUE -> {
-                            val value = NamecoinValue.render(signer.pubKey(), config.list(EngineConfig.NAMECOIN_RELAYS))
-                            mapOf(
-                                "namecoinValue" to value,
-                                "namecoinBytes" to value.toByteArray(Charsets.UTF_8).size.toString(),
-                            )
-                        }
-
                         else -> {
                             throw IllegalArgumentException("Unknown Magpie task '$task'")
                         }
@@ -187,6 +180,27 @@ public class MagpieEngineImpl : MagpieEngine {
             group = config[EngineConfig.GROUP]?.takeIf { it.isNotBlank() },
             indexRelays = config.list(EngineConfig.INDEX_RELAYS),
         )
+
+    private fun printNamecoinValue(config: Map<String, String>): Map<String, String> {
+        val pubKey =
+            config[EngineConfig.NAMECOIN_PUBKEY]?.trim()?.takeIf { it.isNotEmpty() }
+                ?: run {
+                    check(config[EngineConfig.BUNKER_URI].isNullOrBlank()) {
+                        "printMagpieNamecoinValue never contacts a NIP-46 bunker. Supply --pubkey with the 64-hex release pubkey; " +
+                            "the bunker transport pubkey is not a substitute."
+                    }
+                    val nsec = config[EngineConfig.NSEC]?.takeIf { it.isNotBlank() }
+                    check(nsec != null) {
+                        "printMagpieNamecoinValue needs --pubkey with the 64-hex release pubkey or a local secret key."
+                    }
+                    runBlocking { SecretKeySigner(nsec).pubKey() }
+                }
+        val value = NamecoinValue.render(pubKey, config.list(EngineConfig.NAMECOIN_RELAYS))
+        return mapOf(
+            "namecoinValue" to value,
+            "namecoinBytes" to value.toByteArray(Charsets.UTF_8).size.toString(),
+        )
+    }
 
     private fun signerFor(
         config: Map<String, String>,

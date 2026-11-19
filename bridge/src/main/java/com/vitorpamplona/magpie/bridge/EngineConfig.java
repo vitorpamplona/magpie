@@ -78,6 +78,8 @@ public final class EngineConfig {
     public static final String NAMECOIN_CORE_RPC_FALLBACK_TO_ELECTRUMX = "namecoinCoreRpcFallbackToElectrumx";
     /** Relay hints for the printed Namecoin value, newline-separated. */
     public static final String NAMECOIN_RELAYS = "namecoinRelays";
+    /** Explicit offline 64-hex release pubkey for the print-only Namecoin value task. */
+    public static final String NAMECOIN_PUBKEY = "namecoinPubkey";
 
     // Publishing
     public static final String TASK_PUBLISH = "publish";

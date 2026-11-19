@@ -235,6 +235,11 @@ class Builds : AutoCloseable {
 
     val signerEnv: Map<String, String> get() = mapOf("MAGPIE_NSEC" to publisher.nsec)
 
+    fun bunkerClientKeyFile(uri: String): File {
+        val transport = uri.substringAfter("://").substringBefore('?').lowercase()
+        return File(testKitDir, "magpie/bunker-clients/$transport.key")
+    }
+
     override fun close() {
         relay.close()
         blossom.close()

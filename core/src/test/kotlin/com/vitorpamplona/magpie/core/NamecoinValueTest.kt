@@ -103,6 +103,33 @@ class NamecoinValueTest {
     }
 
     @Test
+    fun enginePrintTaskAcceptsAnOfflinePubkeyWithoutASigner() {
+        val logger =
+            object : EngineLogger {
+                override fun error(message: String) {}
+
+                override fun warn(message: String) {}
+
+                override fun lifecycle(message: String) {}
+
+                override fun info(message: String) {}
+
+                override fun debug(message: String) {}
+            }
+        val result =
+            MagpieEngineImpl().runTask(
+                EngineConfig.TASK_PRINT_NAMECOIN_VALUE,
+                mapOf(
+                    EngineConfig.NAMECOIN_PUBKEY to alice.uppercase(),
+                    EngineConfig.RELEASE_KEY_CHECK to EngineConfig.RELEASE_KEY_OFF,
+                ),
+                logger,
+            )
+        assertEquals(NamecoinValue.render(alice), result.getValue("namecoinValue"))
+        assertEquals(setOf("namecoinValue", "namecoinBytes"), result.keys)
+    }
+
+    @Test
     fun malformedKeysAreRejected() {
         assertFailsWith<IllegalArgumentException> { NamecoinValue.render("not-a-key") }
         assertFailsWith<IllegalArgumentException> { NamecoinValue.render("g".repeat(64)) }
