@@ -39,10 +39,11 @@ import com.vitorpamplona.quartz.nip01Core.core.HexKey
 import com.vitorpamplona.quartz.nip01Core.relay.filters.Filter
 import com.vitorpamplona.quartz.nip01Core.relay.normalizer.RelayUrlNormalizer
 import com.vitorpamplona.quartz.nip01Core.signers.EventTemplate
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
@@ -389,14 +390,25 @@ public class Publisher(
 
         val hints = hintsFor(hosted.present)
         val signedEarly = early
+        var discarded = 0
         val event =
             when {
                 signedEarly == null -> signChecked(template(hints))
                 signedEarly.first == hints -> signedEarly.second
                 else -> {
-                    // A server the checks counted on refused an upload: the hints changed.
+                    // A server the checks counted on failed its uploads, so the early release
+                    // names a server that lacks some files. Try to sign it with the right hints;
+                    // if that isn't approved, the early one still works: hints are only where
+                    // clients look first, and every blob is on a server of the key's list.
                     log.warn("Magpie: the release's server hints changed during upload (${signedEarly.first} -> $hints); signing it again")
-                    signChecked(template(hints))
+                    try {
+                        signChecked(template(hints)).also { discarded = 1 }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        log.warn("Magpie: the release with corrected hints was not signed (${e.message}); publishing the one signed before uploading")
+                        signedEarly.second
+                    }
                 }
             }
         val results = nostr.publish(relays, event)
@@ -408,7 +420,8 @@ public class Publisher(
         }
         log.lifecycle(
             "Magpie: published ${manifest.coordinate} as ${event.id} to ${accepted.size}/${results.size} relays " +
-                "(${hosted.uploaded} blobs uploaded, ${signer.signatures} signatures)",
+                "(${hosted.uploaded} blobs uploaded, ${signer.signatures} signatures" +
+                (if (discarded > 0) ", one a release replaced for its stale server hints)" else ")"),
         )
         return PublishResult(manifest.coordinate.toString(), manifestBlob.sha256, event.id, hosted.uploaded, signer.signatures, accepted)
     }
@@ -476,9 +489,10 @@ public class Publisher(
         dryRun: Boolean,
         known: Map<String, Set<String>> = emptyMap(),
         /**
-         * Runs while the upload authorizations are being signed and before any upload, with the servers
-         * expected to hold each blob afterwards (those that have it, and those whose checks said
-         * they would take it). Not called when nothing needs uploading.
+         * Runs beside the upload authorizations' signing and the uploads, started before any
+         * upload, with the servers expected to hold each blob afterwards (those that have it, and
+         * those whose checks said they would take it). [host] returns once it is done too. Not
+         * called when nothing needs uploading.
          */
         beforeUpload: (suspend (predicted: Map<String, Set<String>>) -> Unit)? = null,
     ): Hosted {
@@ -525,26 +539,7 @@ public class Publisher(
         if (dryRun || lacking.isEmpty()) return Hosted(0, present)
 
         val toUpload = lacking.values.flatten().distinctBy { it.sha256 }
-        // One authorization per batch of hashes, so its header stays under common size limits.
-        val sharedBy = HashMap<String, Event>()
-        val batchSize = HashMap<String, Int>()
         val predicted = unique.associate { it.sha256 to (present.getValue(it.sha256) + willTake[it.sha256].orEmpty()) }
-        // Every request goes out at once: a remote signer queues them, so its user approves them
-        // in a row, and Quartz's NIP-46 client matches each answer to its request by id.
-        coroutineScope {
-            val release = beforeUpload?.let { sign -> async { sign(predicted) } }
-            toUpload
-                .chunked(hashesPerAuth)
-                .map { batch -> async { batch to signChecked(BlossomClient.uploadAuth(batch.map { it.sha256 }, lacking.keys, now())) } }
-                .awaitAll()
-                .forEach { (batch, auth) ->
-                    batch.forEach {
-                        sharedBy[it.sha256] = auth
-                        batchSize[it.sha256] = batch.size
-                    }
-                }
-            release?.await()
-        }
         val sharedRefused = ConcurrentHashMap.newKeySet<String>()
         val givenUp = ConcurrentHashMap.newKeySet<String>()
         val perBlobWorks = ConcurrentHashMap.newKeySet<String>()
@@ -559,14 +554,30 @@ public class Publisher(
             }
 
         coroutineScope {
+            // Every signature request goes out at once: a remote signer queues them, so its user
+            // approves them in a row, and the NIP-46 client matches each answer to its request by
+            // id. One authorization per batch of hashes keeps its header under common size limits;
+            // a batch's uploads start as soon as its authorization is back. The release is signed
+            // beside them and awaited only once the uploads are done.
+            val release = beforeUpload?.let { sign -> async { sign(predicted) } }
+            val sharedBy = HashMap<String, Deferred<Event>>()
+            val batchSize = HashMap<String, Int>()
+            toUpload.chunked(hashesPerAuth).forEach { batch ->
+                val auth = async { signChecked(BlossomClient.uploadAuth(batch.map { it.sha256 }, lacking.keys, now())) }
+                batch.forEach {
+                    sharedBy[it.sha256] = auth
+                    batchSize[it.sha256] = batch.size
+                }
+            }
             val gate = Semaphore(parallelism)
             lacking
                 .flatMap { (server, list) -> list.map { server to it } }
                 .map { (server, blob) ->
                     async {
+                        val shared = sharedBy.getValue(blob.sha256).await()
                         gate.withPermit {
                             if (server in givenUp) return@withPermit
-                            var outcome = if (server in sharedRefused) null else blossom.upload(server, blob, sharedBy.getValue(blob.sha256))
+                            var outcome = if (server in sharedRefused) null else blossom.upload(server, blob, shared)
                             if (outcome == null || (!outcome.ok && outcome.isAuthRefusal && batchSize.getValue(blob.sha256) > 1)) {
                                 if (sharedRefused.add(server) && outcome != null) {
                                     log.info("$server refused the shared upload authorization (${outcome.reason}); using one per blob")
@@ -597,6 +608,7 @@ public class Publisher(
                         }
                     }
                 }.awaitAll()
+            release?.await()
         }
         val stillMissing = unique.filter { present.getValue(it.sha256).isEmpty() }
         if (stillMissing.isNotEmpty()) {

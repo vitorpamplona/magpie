@@ -110,8 +110,11 @@ runs in a worker process:
    its request by id. They are kind 24242 authorizations covering the missing blobs (and the
    manifest), one per 48 hashes (`MAX_HASHES_PER_AUTH`) so the `Authorization` header stays under
    nginx's 8 KB default, then the release, with the server hints the checks predict.
-7. The blobs upload in parallel; a server that refuses the authorizations gets one per blob. If a
-   server the release names failed its uploads, the release is signed again without it.
+7. The blobs upload in parallel, each batch as soon as its authorization is back, without
+   waiting for the release's approval; a server that refuses the authorizations gets one per
+   blob. If a server the release names failed its uploads, the release is signed again without
+   it; if that one isn't approved, the first goes out with its stale hint (clients fall back to
+   the key's server list).
 8. The release is published to the key's relays (write relays and the
    `nostr.json` relays), where consumers read it; at least one must accept. A key with no relays
    of its own is published to the index relays instead, where consumers then look, with a
@@ -130,6 +133,10 @@ host's klibs fail here), upload the manifest, sign once.
 `MAGPIE_BUNKER` (a NIP-46 `bunker://` URI; the key never touches CI) wins over `MAGPIE_NSEC`.
 The NIP-46 client key is kept in Magpie's cache (`bunker-clients/<bunker pubkey>.key`, owner-only),
 so every task and build on a machine is the client the bunker already paired with.
+A sign request waits as long as the bunker keeps answering: it times out only after 150 s with
+no answer to any request, so a person can work through a release's queue at their own pace.
+Magpie sends sign requests through its own `RemoteSignerManager` and subscription, resending
+the same request every 65 s, because Quartz's `NostrSignerRemote` gives up after one retry.
 Both are read from the environment when the task runs, never stored in the configuration cache.
 
 ## Class loading in the Gradle daemon

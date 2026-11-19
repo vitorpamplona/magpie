@@ -197,7 +197,7 @@ class ReleaseLifecycleTest {
         world.stack(alice).use { assertEquals(200, it.get("com/example/lib-target30/1.0.0/lib-target30-1.0.0.klib").status) }
     }
 
-    /** Signs as [who], noting each event's kind and how many uploads the server had taken by then. */
+    /** Signs as [who], noting each request's kind and how many uploads the server had taken when it was sent. */
     private class WatchingSigner(
         who: TestIdentity,
         private val blossom: InMemoryBlossom,
@@ -208,7 +208,10 @@ class ReleaseLifecycleTest {
 
         override suspend fun pubKey(): HexKey = real.pubKey()
 
-        override suspend fun sign(template: EventTemplate<*>): Event = real.sign(template).also { seen += it.kind to blossom.uploads.get() }
+        override suspend fun sign(template: EventTemplate<*>): Event {
+            seen += template.kind to blossom.uploads.get()
+            return real.sign(template)
+        }
     }
 
     private fun publishWith(
@@ -224,7 +227,7 @@ class ReleaseLifecycleTest {
     }
 
     @Test
-    fun everySignatureIsAskedForBeforeTheFirstUpload() {
+    fun everySignatureIsRequestedBeforeTheFirstUpload() {
         // A person approving on a remote signer gets every request of a release together.
         world.setUpPublisher(alice)
         val targets = (1..30).associate { "target$it" to "klib" }
@@ -238,7 +241,7 @@ class ReleaseLifecycleTest {
             (List(authorizations) { MagpieSpec.KIND_BLOSSOM_AUTH } + MagpieSpec.KIND_RELEASE).sorted(),
             signer.seen.map { it.first }.sorted(),
         )
-        assertTrue(signer.seen.all { it.second == 0 }, "signed after uploads started: ${signer.seen}")
+        assertTrue(signer.seen.all { it.second == 0 }, "requested after uploads started: ${signer.seen}")
         assertEquals(result.uploaded, world.blossom.uploads.get())
         assertNotNull(result.eventId)
     }
@@ -276,6 +279,33 @@ class ReleaseLifecycleTest {
 
         assertTrue(result.signatures > 2, "a release this size takes several authorizations: ${result.signatures}")
         assertEquals(result.signatures, signer.mostAtOnce.get(), "every request was waiting on the signer at once")
+    }
+
+    @Test
+    fun uploadsDoNotWaitForTheReleaseToBeApproved() {
+        // The person approves the upload authorization at once and the release a while later:
+        // the blobs upload meanwhile, and the release is published once both are done.
+        world.setUpPublisher(alice)
+        val repo = FakeMavenRepo(world.dir("repo")).publish("1.0.0")
+        val uploadsWhenReleaseApproved = AtomicInteger(-1)
+        val signer =
+            object : MagpieSigner {
+                private val real = SecretKeySigner(alice.nsec)
+                override val signatures: Int get() = real.signatures
+
+                override suspend fun pubKey(): HexKey = real.pubKey()
+
+                override suspend fun sign(template: EventTemplate<*>): Event {
+                    if (template.kind == MagpieSpec.KIND_RELEASE) {
+                        delay(1_500)
+                        uploadsWhenReleaseApproved.set(world.blossom.uploads.get())
+                    }
+                    return real.sign(template)
+                }
+            }
+        val result = publishWith(signer, repo.dir, "1.0.0")
+        assertEquals(result.uploaded, uploadsWhenReleaseApproved.get(), "every blob was up before the release was approved")
+        assertNotNull(result.eventId)
     }
 
     @Test
@@ -371,6 +401,99 @@ class ReleaseLifecycleTest {
             assertEquals(500, stack.get("com/example/lib/1.0.0/lib-1.0.0.pom").status)
         }
         assertFalse(File(world.root, "magpie.lock").exists())
+    }
+
+    private fun publishThroughBunker(
+        bunker: TestBunker,
+        repo: File,
+        timeoutMs: Long = 20_000,
+    ): PublishResult {
+        val http = Http.client()
+        val nostr = QuartzNostrIO(http, world.log, idleTimeoutMs = 3_000)
+        try {
+            BunkerSigner(bunker.uri, nostr, world.log, timeoutMs = timeoutMs).use { signer ->
+                val publisher = Publisher(nostr, BlossomClient(http, world.log), signer, http, world.log)
+                return runBlocking { publisher.publish(PublishSettings(repo, "com.example", "1.0.0", "lib", listOf(world.relay.url))) }
+            }
+        } finally {
+            nostr.close()
+        }
+    }
+
+    @Test
+    fun aBunkerAnsweringOutOfOrderGetsEachUploadItsOwnAuthorization() {
+        world.setUpPublisher(alice)
+        val targets = (1..30).associate { "target$it" to "klib" }
+        val repo = FakeMavenRepo(world.dir("repo")).publish("1.0.0", targets = targets)
+        TestBunker(world.relay, alice).use { bunker ->
+            // The first requests are answered last.
+            bunker.approvalDelayMs = { n -> (5 - n).coerceAtLeast(0) * 400L }
+            val result = publishThroughBunker(bunker, repo.dir)
+
+            assertTrue(result.signatures > 2, "several authorizations and the release: ${result.signatures}")
+            assertEquals(result.signatures, bunker.signRequests.get())
+            // InMemoryBlossom only stores a blob whose authorization lists its hash.
+            assertEquals(result.uploaded, world.blossom.uploads.get())
+            assertNotNull(result.eventId)
+        }
+    }
+
+    @Test
+    fun aRequestWaitsWhileThePersonIsStillApprovingTheQueue() {
+        // Four requests approved one at a time, 800 ms apart: the last answer comes 3.2 s after
+        // they were sent, past a 2 s window measured from sending, but never 2 s without an answer.
+        world.setUpPublisher(alice)
+        val targets = (1..30).associate { "target$it" to "klib" }
+        val repo = FakeMavenRepo(world.dir("repo")).publish("1.0.0", targets = targets)
+        TestBunker(world.relay, alice).use { bunker ->
+            bunker.oneApprovalAtATime = true
+            bunker.approvalDelayMs = { 800 }
+            val result = publishThroughBunker(bunker, repo.dir, timeoutMs = 2_000)
+
+            assertTrue(result.signatures >= 4, "signatures: ${result.signatures}")
+            assertNotNull(result.eventId)
+        }
+    }
+
+    @Test
+    fun aBunkerThatStopsAnsweringFailsThePublishInsteadOfHanging() {
+        world.setUpPublisher(alice)
+        TestBunker(world.relay, alice).use { bunker ->
+            bunker.approvalDelayMs = { 60_000 }
+            val started = System.currentTimeMillis()
+            val error = assertFailsWith<IllegalStateException> { publishThroughBunker(bunker, FakeMavenRepo(world.dir("repo")).publish("1.0.0").dir, timeoutMs = 1_500) }
+            assertTrue("answered no request" in error.message!!, error.message)
+            assertTrue(System.currentTimeMillis() - started < 15_000, "gave up within the window")
+            assertEquals(0, world.relay.query(Filter(kinds = listOf(MagpieSpec.KIND_RELEASE))).size)
+        }
+    }
+
+    @Test
+    fun aDeclinedReSignPublishesTheReleaseSignedBeforeUploading() {
+        // blossom2 passes the checks and then refuses its uploads, so the release is signed
+        // again without it; the person declines that one, and the first release goes out.
+        world.setUpPublisher(alice, servers = listOf(world.blossom.url, world.blossom2.url))
+        world.blossom2.refuseAllUploads = true
+        val repo = FakeMavenRepo(world.dir("repo")).publish("1.0.0")
+        val signer =
+            object : MagpieSigner {
+                private val real = SecretKeySigner(alice.nsec)
+                private val releases = AtomicInteger()
+                override val signatures: Int get() = real.signatures
+
+                override suspend fun pubKey(): HexKey = real.pubKey()
+
+                override suspend fun sign(template: EventTemplate<*>): Event {
+                    if (template.kind == MagpieSpec.KIND_RELEASE && releases.incrementAndGet() == 2) {
+                        throw IllegalStateException("User has rejected the request.")
+                    }
+                    return real.sign(template)
+                }
+            }
+        val result = publishWith(signer, repo.dir, "1.0.0")
+        val published = MagpieEvents.wrap(world.relay.query(Filter(ids = listOf(result.eventId!!))).single()) as MavenReleaseEvent
+        assertEquals(listOf(world.blossom.url, world.blossom2.url), published.servers(), "the early release, stale hint and all")
+        world.stack(alice).use { assertEquals(200, it.get("com/example/lib/1.0.0/lib-1.0.0.module").status) }
     }
 
     @Test
