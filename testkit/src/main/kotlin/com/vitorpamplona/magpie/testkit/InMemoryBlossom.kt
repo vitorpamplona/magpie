@@ -64,6 +64,11 @@ class InMemoryBlossom(
     @Volatile var requireAuth: Boolean = true,
     /** Answer an unauthorized BUD-06 preflight with 401, as blossom.band does. */
     @Volatile var preflightNeedsAuth: Boolean = false,
+    /**
+     * Longest `Authorization` header accepted; longer ones get nginx's
+     * `400 Request Header Or Cookie Too Large`, as nostr.download and most servers answer past 8 KB.
+     */
+    @Volatile var maxAuthHeaderBytes: Int = Int.MAX_VALUE,
 ) : AutoCloseable {
     val blobs = ConcurrentHashMap<String, ByteArray>()
     val uploads = AtomicInteger()
@@ -173,6 +178,11 @@ class InMemoryBlossom(
     }
 
     private suspend fun upload(call: ApplicationCall) {
+        if ((call.request.header(HttpHeaders.Authorization)?.length ?: 0) > maxAuthHeaderBytes) {
+            // nginx answers before the server sees the request: HTML, no X-Reason.
+            call.respondText("<html><center>Request Header Or Cookie Too Large</center></html>", ContentType.Text.Html, HttpStatusCode.BadRequest)
+            return
+        }
         val body = call.receive<ByteArray>()
         val sha = sha256Hex(body)
         if (body.size > maxUploadSize) {

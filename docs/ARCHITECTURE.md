@@ -105,9 +105,10 @@ runs in a worker process:
 5. Every server is asked `HEAD /<sha256>` for every blob; missing ones get a BUD-06
    `HEAD /upload` preflight. A blob no server would take fails the publish, **before anything is
    signed**.
-6. One kind 24242 authorization covering every missing blob (and the manifest) is signed
-   (signature 1) and used for every upload; a server that refuses it gets one per blob.
-7. The release is signed (signature 2) and published to the key's relays (write relays and the
+6. Kind 24242 authorizations covering the missing blobs (and the manifest) are signed, one per
+   48 hashes (`MAX_HASHES_PER_AUTH`) so the `Authorization` header stays under nginx's 8 KB
+   default, and used for the uploads; a server that refuses them gets one per blob.
+7. The release is signed (the last signature) and published to the key's relays (write relays and the
    `nostr.json` relays), where consumers read it; at least one must accept. A key with no relays
    of its own is published to the index relays instead, where consumers then look, with a
    warning that names `createNostrRelayList`.

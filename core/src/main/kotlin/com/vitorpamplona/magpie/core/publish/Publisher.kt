@@ -103,6 +103,12 @@ public class MissingServerListException(
             "(any BUD-02 server; repeat --server for more), then publish again.",
     )
 
+/**
+ * Most hashes one upload authorization covers by default: about 5 KB of `Authorization` header,
+ * well under nginx's default 8 KB limit, which most Blossom servers sit behind.
+ */
+public const val MAX_HASHES_PER_AUTH: Int = 48
+
 public class VersionAlreadyReleasedException(
     message: String,
 ) : IllegalStateException(message)
@@ -110,8 +116,9 @@ public class VersionAlreadyReleasedException(
 /**
  * Publishes a local Maven repository as a Magpie release: hash every file, make sure each blob
  * can live on at least one of the publisher's Blossom servers (BUD-06), upload what's missing
- * under one BUD-02 authorization, upload the manifest, sign the release and send it to the
- * publisher's own relays. Nothing is signed until every check passes.
+ * under BUD-02 authorizations of up to [MAX_HASHES_PER_AUTH] hashes each, upload the manifest,
+ * sign the release and send it to the publisher's own relays. Nothing is signed until every
+ * check passes.
  */
 public class Publisher(
     private val nostr: NostrIO,
@@ -123,7 +130,17 @@ public class Publisher(
     private val parallelism: Int = 8,
     /** Checks the signer is the key the group's domain vouches for; null skips it. */
     private val keyCheck: ReleaseKeyCheck? = null,
+    /**
+     * Most hashes one upload authorization covers. The authorization travels in the
+     * `Authorization` header, and many Blossom servers sit behind nginx, whose default 8 KB
+     * header limit answers `400 Request Header Or Cookie Too Large` past about 78 hashes.
+     */
+    private val hashesPerAuth: Int = MAX_HASHES_PER_AUTH,
 ) {
+    init {
+        require(hashesPerAuth > 0) { "hashesPerAuth must be positive" }
+    }
+
     private fun now() = clock.nowMillis() / 1000
 
     /** One signature at a time: remote signers answer in order, and a human may be approving. */
@@ -483,7 +500,16 @@ public class Publisher(
         if (dryRun || lacking.isEmpty()) return Hosted(0, present)
 
         val toUpload = lacking.values.flatten().distinctBy { it.sha256 }
-        val shared = signChecked(BlossomClient.uploadAuth(toUpload.map { it.sha256 }, lacking.keys, now()))
+        // One authorization per batch of hashes, so its header stays under common size limits.
+        val sharedBy = HashMap<String, Event>()
+        val batchSize = HashMap<String, Int>()
+        toUpload.chunked(hashesPerAuth).forEach { batch ->
+            val auth = signChecked(BlossomClient.uploadAuth(batch.map { it.sha256 }, lacking.keys, now()))
+            batch.forEach {
+                sharedBy[it.sha256] = auth
+                batchSize[it.sha256] = batch.size
+            }
+        }
         val sharedRefused = ConcurrentHashMap.newKeySet<String>()
         val givenUp = ConcurrentHashMap.newKeySet<String>()
         val perBlobWorks = ConcurrentHashMap.newKeySet<String>()
@@ -505,8 +531,8 @@ public class Publisher(
                     async {
                         gate.withPermit {
                             if (server in givenUp) return@withPermit
-                            var outcome = if (server in sharedRefused) null else blossom.upload(server, blob, shared)
-                            if (outcome == null || (!outcome.ok && outcome.isAuthRefusal && toUpload.size > 1)) {
+                            var outcome = if (server in sharedRefused) null else blossom.upload(server, blob, sharedBy.getValue(blob.sha256))
+                            if (outcome == null || (!outcome.ok && outcome.isAuthRefusal && batchSize.getValue(blob.sha256) > 1)) {
                                 if (sharedRefused.add(server) && outcome != null) {
                                     log.info("$server refused the shared upload authorization (${outcome.reason}); using one per blob")
                                 }

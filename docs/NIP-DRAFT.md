@@ -136,12 +136,14 @@ Readable `group`/`artifact`/`version` tags were considered and dropped: they dup
 ## Blossom
 
 Publishers upload with [BUD-02](https://github.com/hzrd149/blossom/blob/master/buds/02.md)
-using one kind `24242` authorization whose `x` tags cover every blob of the release (and
-`server` tags scoping it to the target servers), falling back to one authorization per blob
-for servers that refuse multi-hash tokens. Before signing anything they SHOULD check every blob
-with [BUD-06](https://github.com/hzrd149/blossom/blob/master/buds/06.md) (`HEAD /upload`) and
-stop if any blob fits on none of their servers. A release then takes two signatures: the upload
-authorization and the release.
+using kind `24242` authorizations whose `x` tags cover the release's blobs (and `server` tags
+scoping them to the target servers), falling back to one authorization per blob for servers that
+refuse multi-hash tokens. An authorization travels in the `Authorization` header, and many
+servers sit behind proxies that refuse headers over 8 KB (about 78 `x` tags), so publishers
+SHOULD split a large release's hashes across several authorizations. Before signing anything they
+SHOULD check every blob with [BUD-06](https://github.com/hzrd149/blossom/blob/master/buds/06.md)
+(`HEAD /upload`) and stop if any blob fits on none of their servers. A release then takes one
+signature per batch of uploads, and one for the release.
 
 Clients fetch blobs (`GET /<sha256>`) from the release's `server` hints, then the publisher's
 current kind `10063`, then their own fallbacks, and MUST check every blob's sha256.
