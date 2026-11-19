@@ -24,6 +24,7 @@ import com.sun.net.httpserver.HttpServer
 import com.vitorpamplona.magpie.core.engine.Http
 import com.vitorpamplona.magpie.core.nostr.QuartzNostrIO
 import com.vitorpamplona.magpie.core.publish.BlossomClient
+import com.vitorpamplona.magpie.core.publish.BunkerSigner
 import com.vitorpamplona.magpie.core.publish.MagpieSigner
 import com.vitorpamplona.magpie.core.publish.PublishSettings
 import com.vitorpamplona.magpie.core.publish.Publisher
@@ -43,6 +44,7 @@ import com.vitorpamplona.magpie.spec.LockedPublisher
 import com.vitorpamplona.magpie.spec.MagpieSpec
 import com.vitorpamplona.magpie.testkit.FakeMavenRepo
 import com.vitorpamplona.magpie.testkit.InMemoryBlossom
+import com.vitorpamplona.magpie.testkit.TestBunker
 import com.vitorpamplona.magpie.testkit.TestIdentity
 import com.vitorpamplona.quartz.nip01Core.core.Event
 import com.vitorpamplona.quartz.nip01Core.core.HexKey
@@ -274,6 +276,76 @@ class ReleaseKeyTest {
             assertEquals(0, signer.signatures, "nothing was sent to sign")
             assertEquals(0, world.blossom.uploads.get(), "nothing was uploaded")
             assertEquals(0, world.relay.query(Filter(kinds = listOf(MagpieSpec.KIND_RELEASE))).size)
+        }
+    }
+
+    private fun latePublisher(
+        world: MagpieWorld,
+        signer: MagpieSigner,
+        vouches: Nip05Resolver,
+        nostr: QuartzNostrIO = QuartzNostrIO(Http.client(), world.log, 3_000),
+    ): Publisher {
+        val http = Http.client()
+        return Publisher(nostr, BlossomClient(http, world.log), signer, http, world.log, keyCheck = ReleaseKeyCheck(vouches))
+    }
+
+    @Test
+    fun aCheckOnlyRunStillProvesTheRemoteSignerIsTheReleaseKey() {
+        // A dry run signs nothing, so it connects on purpose: a wrong MAGPIE_BUNKER fails here,
+        // not at release time.
+        MagpieWorld().use { world ->
+            world.setUpPublisher(alice)
+            val repo = FakeMavenRepo(world.dir("repo")).publish("1.0.0")
+            val vouches = Table(mutableMapOf("releases@example.com" to Nip05Answer.Key(alice.pubKey)))
+            val settings = PublishSettings(repo.dir, "com.example", "1.0.0", "lib", listOf(world.relay.url), dryRun = true)
+
+            val wrong = RemoteLikeSigner(mallory, world.blossom)
+            assertFailsWith<ReleaseKeyMismatchException> { runBlocking { latePublisher(world, wrong, vouches).publish(settings) } }
+
+            val right = RemoteLikeSigner(alice, world.blossom)
+            val result = runBlocking { latePublisher(world, right, vouches).publish(settings) }
+            assertEquals(0, result.signatures)
+            assertTrue(right.checksWhenReached.get() >= 0, "the check run reached the signer")
+        }
+    }
+
+    @Test
+    fun aMissingListingNamesTheRemoteSignersKey() {
+        MagpieWorld().use { world ->
+            world.setUpPublisher(alice)
+            val repo = FakeMavenRepo(world.dir("repo")).publish("1.0.0")
+            val error =
+                assertFailsWith<ReleaseKeyMismatchException> {
+                    runBlocking {
+                        latePublisher(world, RemoteLikeSigner(alice, world.blossom), Table(mutableMapOf()))
+                            .publish(PublishSettings(repo.dir, "com.example", "1.0.0", "lib", listOf(world.relay.url)))
+                    }
+                }
+            assertTrue(alice.pubKey in error.message!!, error.message)
+        }
+    }
+
+    @Test
+    fun aBunkerConnectsOnceAfterEveryCheck() {
+        MagpieWorld().use { world ->
+            world.setUpPublisher(alice)
+            val targets = (1..30).associate { "target$it" to "klib" }
+            val repo = FakeMavenRepo(world.dir("repo")).publish("1.0.0", targets = targets)
+            val vouches = Table(mutableMapOf("releases@example.com" to Nip05Answer.Key(alice.pubKey)))
+            TestBunker(world.relay, alice).use { bunker ->
+                val checksAtConnect = AtomicInteger(-1)
+                bunker.onConnect = { checksAtConnect.compareAndSet(-1, world.blossom.heads.get() + world.blossom.preflights.get()) }
+                val nostr = QuartzNostrIO(Http.client(), world.log, 3_000)
+                BunkerSigner(bunker.uri, nostr, world.log, timeoutMs = 20_000).use { signer ->
+                    val result =
+                        runBlocking { latePublisher(world, signer, vouches, nostr).publish(PublishSettings(repo.dir, "com.example", "1.0.0", "lib", listOf(world.relay.url))) }
+                    assertNotNull(result.eventId)
+                    assertTrue(result.signatures > 2, "several authorizations and the release: ${result.signatures}")
+                }
+                nostr.close()
+                assertEquals(1, bunker.connects.get(), "one connection approval for every request")
+                assertEquals(world.blossom.heads.get() + world.blossom.preflights.get(), checksAtConnect.get(), "every check ran before the bunker was reached")
+            }
         }
     }
 

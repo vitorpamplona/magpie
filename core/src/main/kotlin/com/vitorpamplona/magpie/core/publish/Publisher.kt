@@ -140,6 +140,8 @@ public class Publisher(
     private val hashesPerAuth: Int = MAX_HASHES_PER_AUTH,
     /** How many HEAD and BUD-06 checks run at once: small requests, so more than uploads. */
     private val checkParallelism: Int = 32,
+    /** How many of those go to any one server at once, so a key with one server doesn't flood it. */
+    private val checksPerServer: Int = 8,
 ) {
     init {
         require(hashesPerAuth > 0) { "hashesPerAuth must be positive" }
@@ -148,20 +150,17 @@ public class Publisher(
     private fun now() = clock.nowMillis() / 1000
 
     /**
-     * The key a release must be signed with, when the domain vouched for it before the signer
-     * connected: the signer's own key must match it before anything is sent to sign.
-     */
-    @Volatile
-    private var vouched: Pair<VouchedKey.Found, String>? = null
-
-    /**
      * Signs [template] and checks what came back: the expected key, exactly the template asked
      * for, and a valid signature. A misbehaving bunker can't slip in another key or other tags.
      */
-    private suspend fun signChecked(template: EventTemplate<*>): Event {
+    private suspend fun signChecked(
+        template: EventTemplate<*>,
+        /** The key the domain vouched for before the signer connected, which the signer must have. */
+        vouched: ReleaseKey? = null,
+    ): Event {
         // A remote signer connects here, on the first request, right before it is asked to sign.
         val expected = signer.pubKey()
-        vouched?.let { (key, group) -> if (key.pubKey != expected) throw ReleaseKeyCheck.mismatch(key, group, expected) }
+        vouched?.requireSigner(expected)
         val event = signer.sign(template)
         val problem =
             when {
@@ -267,19 +266,60 @@ public class Publisher(
     }
 
     /**
+     * The key a release is checked and signed with, and its domain's relays. [vouched] is set
+     * when the domain named the key before the signer was reached: [signChecked] then makes sure
+     * the signer has it before sending anything to sign.
+     */
+    private class ReleaseKey(
+        val pubKey: HexKey,
+        val domainRelays: List<String>,
+        val vouched: VouchedKey.Found? = null,
+        val group: String = "",
+    ) {
+        fun requireSigner(actual: HexKey) {
+            if (vouched != null && vouched.pubKey != actual) throw ReleaseKeyCheck.mismatch(vouched, group, actual)
+        }
+    }
+
+    /**
      * The release key and its domain's relays. With a key check, the domain names the key, so a
      * remote signer is only connected when the release is ready to sign, next to its signature
-     * requests, and [signChecked] checks it is that key; without one, the signer is asked now.
+     * requests; without one, the signer is asked now. A check-only run connects anyway, to
+     * prove the signer is the release key.
      */
-    private suspend fun releaseKey(group: String): Pair<HexKey, List<String>> {
-        vouched = null
-        val check = keyCheck ?: return signer.pubKey() to emptyList()
-        signer.pubKeyIfKnown()?.let { known -> return known to check.verify(group, known) }
-        val found = check.vouched(group)
-        vouched = found to group
-        log.lifecycle("Magpie: ${found.identifier} names ${PublicKeys.npub(found.pubKey)} as the release key; the signer is asked once the release is ready to sign")
-        return found.pubKey to found.relays
+    private suspend fun releaseKey(
+        group: String,
+        dryRun: Boolean,
+    ): ReleaseKey {
+        val check = keyCheck ?: return ReleaseKey(signer.pubKey(), emptyList())
+        signer.pubKeyIfKnown()?.let { known -> return ReleaseKey(known, check.verify(group, known)) }
+        // Only when no domain lists a key: reaching the signer then fills its key into the error.
+        val found = check.vouched(group) { signerKeyOrNull() }
+        val key = ReleaseKey(found.pubKey, found.relays, found, group)
+        if (dryRun) {
+            key.requireSigner(signer.pubKey())
+        } else {
+            log.lifecycle("Magpie: ${found.identifier} names ${PublicKeys.npub(found.pubKey)} as the release key; the signer is asked once the release is ready to sign")
+        }
+        return key
     }
+
+    /** Runs [block] holding one of [server]'s own check permits, then one of the shared [gate]'s. */
+    private suspend inline fun <T> checkSlot(
+        gate: Semaphore,
+        perServer: Map<String, Semaphore>,
+        server: String,
+        block: () -> T,
+    ): T = perServer.getValue(server).withPermit { gate.withPermit(block) }
+
+    private suspend fun signerKeyOrNull(): HexKey? =
+        try {
+            signer.pubKey()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
 
     public suspend fun publish(settings: PublishSettings): PublishResult {
         val root = settings.rootArtifact ?: RepoScanner.guessRootArtifact(settings.repoDir, settings.group, settings.version)
@@ -287,8 +327,8 @@ public class Publisher(
         val manifest = scanned.manifest
         log.lifecycle("Magpie: ${manifest.coordinate} has ${manifest.files.size} files in ${manifest.artifacts.size} modules")
 
-        val (key, domainRelays) = releaseKey(settings.group)
-        val context = context(settings.indexRelays, domainRelays, key)
+        val key = releaseKey(settings.group, settings.dryRun)
+        val context = context(settings.indexRelays, key.domainRelays, key.pubKey)
         val relays = targets(context.pubKey, context.homeRelays, settings.indexRelays)
         if (!manifest.coordinate.isSnapshot) refuseOverwrite(manifest, context, relays)
 
@@ -296,7 +336,7 @@ public class Publisher(
             scanned.files.map { (key, file) -> BlobSource(manifest[key]!!.sha256, file.length(), contentTypeOf(key), file = file) }
 
         if (settings.partial) {
-            val hosted = host(files, context.servers, settings.dryRun)
+            val hosted = host(files, context.servers, settings.dryRun, key)
             if (settings.dryRun) {
                 log.lifecycle("Magpie: dry run; this host's ${files.size} files would upload, no partial manifest written")
                 return PublishResult(manifest.coordinate.toString(), manifest.sha256Hex(), null, 0, signer.signatures, emptyList())
@@ -312,7 +352,7 @@ public class Publisher(
         if (missing.isNotEmpty()) {
             throw IllegalStateException("Refusing to publish ${manifest.coordinate}: Gradle module metadata references files that were not published:\n  " + missing.joinToString("\n  "))
         }
-        return finish(manifest, files, context, relays, settings.dryRun)
+        return finish(manifest, files, context, relays, settings.dryRun, key)
     }
 
     /** Merges the partial manifests in [PublishSettings.partialDir] and publishes the release. */
@@ -329,8 +369,8 @@ public class Publisher(
         }
         log.lifecycle("Magpie: merged ${partials.size} partial manifests into ${manifest.files.size} files")
 
-        val (key, domainRelays) = releaseKey(settings.group)
-        val context = context(settings.indexRelays, domainRelays, key)
+        val key = releaseKey(settings.group, settings.dryRun)
+        val context = context(settings.indexRelays, key.domainRelays, key.pubKey)
         val relays = targets(context.pubKey, context.homeRelays, settings.indexRelays)
         if (!manifest.coordinate.isSnapshot) refuseOverwrite(manifest, context, relays)
 
@@ -339,12 +379,13 @@ public class Publisher(
         val wrongSize = ConcurrentHashMap.newKeySet<String>()
         coroutineScope {
             val gate = Semaphore(checkParallelism)
+            val perServer = context.servers.associateWith { Semaphore(checksPerServer) }
             manifest.files
                 .flatMap { (key, file) ->
                     context.servers.map { server ->
                         async {
-                            gate.withPermit {
-                                val size = blossom.size(server, file.sha256) ?: return@withPermit
+                            checkSlot(gate, perServer, server) {
+                                val size = blossom.size(server, file.sha256) ?: return@checkSlot
                                 if (size >= 0 && size != file.size) {
                                     wrongSize += "$key: $server has $size bytes, the partial manifest says ${file.size}"
                                 } else {
@@ -374,7 +415,7 @@ public class Publisher(
                     missing.joinToString("\n  "),
             )
         }
-        return finish(manifest, emptyList(), context, relays, settings.dryRun, known = present)
+        return finish(manifest, emptyList(), context, relays, settings.dryRun, key, known = present)
     }
 
     private suspend fun finish(
@@ -383,6 +424,7 @@ public class Publisher(
         context: PublisherContext,
         relays: List<String>,
         dryRun: Boolean,
+        key: ReleaseKey,
         known: Map<String, Set<String>> = emptyMap(),
     ): PublishResult {
         val manifestBytes = manifest.toBytes()
@@ -408,9 +450,9 @@ public class Publisher(
         // It is only published once every blob is up.
         var early: Pair<List<String>, Event>? = null
         val hosted =
-            host(files + manifestBlob, context.servers, dryRun, known) { predicted ->
+            host(files + manifestBlob, context.servers, dryRun, key, known) { predicted ->
                 val hints = hintsFor(predicted)
-                early = hints to signChecked(template(hints))
+                early = hints to signChecked(template(hints), key)
             }
         if (dryRun) {
             log.lifecycle("Magpie: dry run; ${manifest.coordinate} checks passed, nothing uploaded or signed")
@@ -422,7 +464,7 @@ public class Publisher(
         var discarded = 0
         val event =
             when {
-                signedEarly == null -> signChecked(template(hints))
+                signedEarly == null -> signChecked(template(hints), key)
                 signedEarly.first == hints -> signedEarly.second
                 else -> {
                     // A server the checks counted on failed its uploads, so the early release
@@ -431,7 +473,7 @@ public class Publisher(
                     // clients look first, and every blob is on a server of the key's list.
                     log.warn("Magpie: the release's server hints changed during upload (${signedEarly.first} -> $hints); signing it again")
                     try {
-                        signChecked(template(hints)).also { discarded = 1 }
+                        signChecked(template(hints), key).also { discarded = 1 }
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
@@ -516,6 +558,7 @@ public class Publisher(
         blobs: List<BlobSource>,
         servers: List<String>,
         dryRun: Boolean,
+        key: ReleaseKey,
         known: Map<String, Set<String>> = emptyMap(),
         /**
          * Runs beside the upload authorizations' signing and the uploads, started before any
@@ -533,11 +576,12 @@ public class Publisher(
         val willTake = ConcurrentHashMap<String, MutableSet<String>>()
         coroutineScope {
             val gate = Semaphore(checkParallelism)
+            val perServer = servers.associateWith { Semaphore(checksPerServer) }
             servers
                 .flatMap { server ->
                     unique.filter { server !in present.getValue(it.sha256) }.map { blob ->
                         async {
-                            gate.withPermit {
+                            checkSlot(gate, perServer, server) {
                                 if (blossom.has(server, blob.sha256)) {
                                     present.getValue(blob.sha256) += server
                                 } else {
@@ -579,7 +623,7 @@ public class Publisher(
 
         suspend fun perBlobAuth(blob: BlobSource): Event =
             perBlob[blob.sha256] ?: perBlobLock.forKey(blob.sha256).withLock {
-                perBlob[blob.sha256] ?: signChecked(BlossomClient.uploadAuth(listOf(blob.sha256), lacking.keys, now())).also { perBlob[blob.sha256] = it }
+                perBlob[blob.sha256] ?: signChecked(BlossomClient.uploadAuth(listOf(blob.sha256), lacking.keys, now()), key).also { perBlob[blob.sha256] = it }
             }
 
         coroutineScope {
@@ -592,7 +636,7 @@ public class Publisher(
             val sharedBy = HashMap<String, Deferred<Event>>()
             val batchSize = HashMap<String, Int>()
             toUpload.chunked(hashesPerAuth).forEach { batch ->
-                val auth = async { signChecked(BlossomClient.uploadAuth(batch.map { it.sha256 }, lacking.keys, now())) }
+                val auth = async { signChecked(BlossomClient.uploadAuth(batch.map { it.sha256 }, lacking.keys, now()), key) }
                 batch.forEach {
                     sharedBy[it.sha256] = auth
                     batchSize[it.sha256] = batch.size

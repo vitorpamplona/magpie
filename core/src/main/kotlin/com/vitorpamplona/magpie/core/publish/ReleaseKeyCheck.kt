@@ -49,7 +49,7 @@ public class ReleaseKeyCheck(
         group: String,
         signer: HexKey,
     ): List<String> {
-        val vouched = vouched(group, signer)
+        val vouched = vouched(group) { signer }
         if (vouched.pubKey != signer) throw mismatch(vouched, group, signer)
         return vouched.relays
     }
@@ -57,11 +57,12 @@ public class ReleaseKeyCheck(
     /**
      * [group]'s release key and the relays its domain lists for it, read from the domain without
      * asking the signer: a publisher checks everything with it and connects only to sign.
-     * [signerHint] only fills the `nostr.json` example when no domain lists a key.
+     * [signerHint] is only asked when no domain lists a key, to put the signer's key in the
+     * `nostr.json` example of the error.
      */
     public suspend fun vouched(
         group: String,
-        signerHint: HexKey? = null,
+        signerHint: suspend () -> HexKey? = { null },
     ): VouchedKey.Found {
         val identifiers =
             if (identifier != null) {
@@ -78,10 +79,10 @@ public class ReleaseKeyCheck(
                     "turn this check off with magpie { verifyReleaseKey.set(false) }.",
             )
         }
-        val listing = "{\"names\":{\"${ReleaseIdentity.NAME}\":\"${signerHint ?: "<your hex pubkey>"}\"}}"
         return when (val answer = nip05.vouch(identifiers)) {
             is VouchedKey.Found -> answer
             is VouchedKey.NoneListed -> {
+                val listing = "{\"names\":{\"${ReleaseIdentity.NAME}\":\"${signerHint() ?: "<your hex pubkey>"}\"}}"
                 throw ReleaseKeyMismatchException(
                     "No domain vouches for a release key for $group (tried ${answer.tried.joinToString()}). Add $listing to " +
                         "https://${answer.tried.last().substringAfter('@')}/.well-known/nostr.json, then publish again.",

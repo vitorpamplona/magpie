@@ -41,6 +41,7 @@ import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import java.security.MessageDigest
 import java.util.Base64
@@ -91,6 +92,18 @@ class InMemoryBlossom(
     @Volatile
     var available: Boolean = true
 
+    /** Answer this many BUD-06 preflights `429 Too Many Requests` (with `Retry-After: 0`) first. */
+    val busyPreflights = AtomicInteger()
+
+    /** Wait this long before answering each request, so concurrent ones overlap. */
+    @Volatile
+    var answerDelayMs: Long = 0
+
+    private val inFlight = AtomicInteger()
+
+    /** The most requests the server was answering at once. */
+    val mostAtOnce = AtomicInteger()
+
     private val engine: EmbeddedServer<*, *> =
         embeddedServer(CIO, port = 0, host = "127.0.0.1") {
             routing {
@@ -111,6 +124,16 @@ class InMemoryBlossom(
     val url: String = "http://127.0.0.1:$port"
 
     private suspend fun serve(call: ApplicationCall) {
+        mostAtOnce.accumulateAndGet(inFlight.incrementAndGet(), ::maxOf)
+        try {
+            if (answerDelayMs > 0) delay(answerDelayMs)
+            answer(call)
+        } finally {
+            inFlight.decrementAndGet()
+        }
+    }
+
+    private suspend fun answer(call: ApplicationCall) {
         if (!available) {
             call.respondText("unavailable", status = HttpStatusCode.ServiceUnavailable)
             return
@@ -157,6 +180,11 @@ class InMemoryBlossom(
 
     private suspend fun preflight(call: ApplicationCall) {
         preflights.incrementAndGet()
+        if (busyPreflights.getAndUpdate { if (it > 0) it - 1 else 0 } > 0) {
+            call.response.header("Retry-After", "0")
+            call.respond(HttpStatusCode.TooManyRequests)
+            return
+        }
         val size = call.request.header("X-Content-Length")?.toLongOrNull()
         val sha = call.request.header("X-SHA-256")
         if (size == null || sha == null || sha.length != 64) {

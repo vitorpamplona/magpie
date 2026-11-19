@@ -26,6 +26,7 @@ import com.vitorpamplona.quartz.nip01Core.core.Event
 import com.vitorpamplona.quartz.nip01Core.signers.EventTemplate
 import com.vitorpamplona.quartz.nipB7Blossom.BlossomServerUrl
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -37,6 +38,7 @@ import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 import java.io.File
 import java.io.IOException
 import java.util.Base64
@@ -99,17 +101,15 @@ public class BlossomClient(
         withContext(Dispatchers.IO) {
             val url = "${server.trimEnd('/')}/$sha256".toHttpUrlOrNull() ?: return@withContext null
             try {
-                http
-                    .newCall(
-                        Request
-                            .Builder()
-                            .url(url)
-                            .head()
-                            .build(),
-                    ).execute()
-                    .use { response ->
-                        if (response.isSuccessful) response.header("Content-Length")?.toLongOrNull() ?: -1L else null
-                    }
+                retryingBusy(
+                    Request
+                        .Builder()
+                        .url(url)
+                        .head()
+                        .build(),
+                ) { response ->
+                    if (response.isSuccessful) response.header("Content-Length")?.toLongOrNull() ?: -1L else null
+                }
             } catch (e: IOException) {
                 log.info("HEAD $server/$sha256 failed: ${e.message}")
                 null
@@ -133,12 +133,14 @@ public class BlossomClient(
                     .header("X-Content-Type", blob.contentType)
                     .build()
             try {
-                http.newCall(request).execute().use { response ->
+                retryingBusy(request) { response ->
                     when {
                         response.isSuccessful -> Preflight.Accepted
                         // 401: the server wants an authorization even to answer, and nothing is
                         // signed until every check passes, so only the signed upload can tell.
                         response.code == 401 || response.code == 404 || response.code == 405 || response.code == 501 -> Preflight.Unknown
+                        // Still busy after the retries: a rate limit, not a refusal of the blob.
+                        response.code in BUSY -> Preflight.Unknown
                         else -> Preflight.Refused(response.code, response.header("X-Reason") ?: response.message)
                     }
                 }
@@ -185,7 +187,45 @@ public class BlossomClient(
             }
         }
 
+    /**
+     * Runs [request], retrying a server that answers busy (429, 502-504) up to [BUSY_RETRIES]
+     * times, after its `Retry-After` (at most 10 s) or a short backoff, then hands [read] the
+     * last answer.
+     */
+    private suspend fun <T> retryingBusy(
+        request: Request,
+        read: (Response) -> T,
+    ): T {
+        var attempt = 0
+        while (true) {
+            var waitMs = -1L
+            val result =
+                http.newCall(request).execute().use { response ->
+                    if (response.code in BUSY && attempt < BUSY_RETRIES) {
+                        waitMs = response
+                            .header("Retry-After")
+                            ?.trim()
+                            ?.toLongOrNull()
+                            ?.let { it.coerceIn(0, 10) * 1000 } ?: (500L shl attempt)
+                        null
+                    } else {
+                        read(response)
+                    }
+                }
+            if (waitMs < 0) {
+                @Suppress("UNCHECKED_CAST")
+                return result as T
+            }
+            attempt++
+            delay(waitMs)
+        }
+    }
+
     public companion object {
+        /** Answers that mean the server is busy, not that it refuses: worth asking again. */
+        private val BUSY = setOf(429, 502, 503, 504)
+        private const val BUSY_RETRIES = 3
+
         /**
          * One BUD-02 upload authorization covering every hash in [hashes] on every server in
          * [servers]. A release signs one per batch of [hashes] before signing the release.

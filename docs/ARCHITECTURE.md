@@ -97,14 +97,17 @@ runs in a worker process:
    chain) and the relays `nostr.json` lists for it. Every check below runs with that key, and a
    remote signer is only reached at step 6, right before its signature requests, where its key
    must be the vouched one or nothing is sent to sign; so its connection approval and the
-   signatures arrive together. A local key is compared right away. The publisher's kind 10002 is read from the index relays and those relays, then
+   signatures arrive together. A local key is compared right away, and a check-only run
+   (`--check-only`) connects to compare the bunker's, since it signs nothing. When no domain
+   lists a key, the signer is reached to put its key in the error's `nostr.json` example. The publisher's kind 10002 is read from the index relays and those relays, then
    its kind 10063 also from the write relays the 10002 names; no 10063 → a failure that names
    `createNostrServerList`.
 3. `ModuleChecker` makes sure every file each `.module` references (and every `available-at`
    module) is in the manifest.
 4. Relays are asked for an existing release of any of the modules at this version by this key;
    one exists → refuse (releases are immutable).
-5. Every server is asked `HEAD /<sha256>` for every blob (32 at a time); missing ones get a BUD-06
+5. Every server is asked `HEAD /<sha256>` for every blob (32 at a time, at most 8 per server;
+   a busy answer, 429 or 502-504, is retried after its `Retry-After`); missing ones get a BUD-06
    `HEAD /upload` preflight. A blob no server would take fails the publish, **before anything is
    signed**.
 6. Every signature is requested at once, in parallel, before any upload; a remote signer queues
